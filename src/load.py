@@ -1,59 +1,64 @@
-import logging
+import os
 import pandas as pd
-from sqlalchemy import create_engine, Table, MetaData
-from sqlalchemy.dialects.postgresql import insert
-from config.settings import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
+from sqlalchemy import create_engine, text
+import logging
 
-logger = logging.getLogger(__name__)
+# 設定日誌
+logging.basicConfig(level=logging.INFO)
 
-def get_engine():
-    """Create SQLAlchemy engine."""
-    from config.settings import DATABASE_URL
-    if DATABASE_URL:
-        return create_engine(DATABASE_URL)
-    conn_str: str = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    return create_engine(conn_str)
+def get_db_connection():
+    """建立資料庫連線"""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise ValueError("❌ DATABASE_URL 未設定")
+    return create_engine(db_url)
 
-def save_to_db(df: pd.DataFrame) -> bool:
+def load_stock_data(df: pd.DataFrame):
     """
-    Load data into PostgreSQL database using Upsert (ON CONFLICT).
+    將股價資料存入資料庫 (支援 Upsert)。
     """
     if df.empty:
-        logger.info("Empty DataFrame, skipping database load.")
-        return False
+        logging.warning("⚠️ 傳入的 DataFrame 是空的，跳過寫入。")
+        return
 
+    engine = get_db_connection()
+    
     try:
-        engine = get_engine()
-        metadata = MetaData()
-        # Reflect the fact_price table
-        fact_price = Table('fact_price', metadata, autoload_with=engine)
-
-        # Convert DataFrame to list of dictionaries for insertion
-        records = df.to_dict(orient='records')
-
         with engine.begin() as conn:
-            for record in records:
-                # Create the insert statement
-                stmt = insert(fact_price).values(record)
+            for _, row in df.iterrows():
+                # 1. 確保 dim_stock 裡有這支股票 (如果沒有就先建立)
+                # 這叫 "Reference Integrity" (參照完整性)
+                stock_id = row['stock_id']
+                conn.execute(text("""
+                    INSERT INTO dim_stock (stock_id) 
+                    VALUES (:stock_id)
+                    ON CONFLICT (stock_id) DO NOTHING;
+                """), {"stock_id": stock_id})
+
+                # 2. 寫入股價 (Upsert: 如果重複就更新 close 和 volume)
+                sql = text("""
+                    INSERT INTO fact_price (stock_id, date, open, high, low, close, volume)
+                    VALUES (:stock_id, :date, :open, :high, :low, :close, :volume)
+                    ON CONFLICT (stock_id, date) 
+                    DO UPDATE SET 
+                        close = EXCLUDED.close,
+                        volume = EXCLUDED.volume,
+                        high = EXCLUDED.high,
+                        low = EXCLUDED.low;
+                """)
                 
-                # Create the upsert logic: ON CONFLICT (stock_id, date) DO UPDATE
-                upsert_stmt = stmt.on_conflict_do_update(
-                    index_elements=['stock_id', 'date'],
-                    set_={
-                        'open_price': stmt.excluded.open_price,
-                        'high_price': stmt.excluded.high_price,
-                        'low_price': stmt.excluded.low_price,
-                        'close_price': stmt.excluded.close_price,
-                        'volume': stmt.excluded.volume,
-                        'adj_close': stmt.excluded.adj_close,
-                        'ma5': stmt.excluded.ma5,
-                        'ma20': stmt.excluded.ma20
-                    }
-                )
-                conn.execute(upsert_stmt)
-        
-        logger.info(f"Successfully loaded {len(df)} records to database.")
-        return True
+                conn.execute(sql, {
+                    "stock_id": row['stock_id'],
+                    "date": row['date'],
+                    "open": row['open'],
+                    "high": row['high'],
+                    "low": row['low'],
+                    "close": row['close'],
+                    "volume": row['volume']
+                })
+            
+            logging.info(f"✅ 成功寫入 {len(df)} 筆資料到資料庫。")
+
     except Exception as e:
-        logger.error(f"Error loading data to database: {str(e)}")
-        return False
+        logging.error(f"❌ 寫入資料庫失敗: {e}")
+        raise e
