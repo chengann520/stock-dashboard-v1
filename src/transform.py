@@ -1,62 +1,42 @@
 import pandas as pd
 import logging
 
-logger = logging.getLogger(__name__)
-
-def process_data(df: pd.DataFrame, stock_id: str) -> pd.DataFrame:
+def process_data(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """
-    Clean and transform raw stock data.
-    
-    Args:
-        df: Raw DataFrame from yfinance.
-        stock_id: Repository ID for the stock.
-        
-    Returns:
-        pd.DataFrame: Processed DataFrame ready for database insertion.
+    資料清洗與技術指標計算 (Transform Layer)
     """
-    if df.empty:
-        return df
-
     try:
-        # 1. Reset index to move 'Date' from index to column
-        df = df.reset_index()
+        if df.empty:
+            return pd.DataFrame()
 
-        # 2. Rename columns to match database schema
-        # yfinance columns usually: Date, Open, High, Low, Close, Volume, Dividends, Stock Splits
-        rename_map: dict[str, str] = {
-            'Date': 'date',
-            'Open': 'open_price',
-            'High': 'high_price',
-            'Low': 'low_price',
-            'Close': 'close_price',
-            'Volume': 'volume',
-            'Adj Close': 'adj_close'
-        }
-        df = df.rename(columns=rename_map)
+        # Debug: 印出目前有的欄位，方便除錯
+        # logging.info(f"轉換前欄位檢查: {df.columns.tolist()}")
 
-        # Ensure adj_close exists (history() sometimes doesn't have it if use_pep440=True or depending on version)
-        if 'adj_close' not in df.columns and 'close_price' in df.columns:
-            df['adj_close'] = df['close_price']
+        # 1. 確保資料按日期排序
+        df = df.sort_values('date').copy()
 
-        # 3. Handle missing values (NaN)
-        # Use forward fill then backward fill for any remaining holes
-        df = df.ffill().bfill()
+        # 2. 關鍵修正：確保欄位名稱正確
+        # 如果 extract.py 沒有轉成小寫，這裡做個防呆
+        df.columns = [c.lower() for c in df.columns]
 
-        # 4. Calculate Indicators (MA5, MA20)
-        df['ma5'] = df['close_price'].rolling(window=5).mean()
-        df['ma20'] = df['close_price'].rolling(window=20).mean()
+        # 檢查是否有 'close' 欄位 (之前報錯是因為找不到 close_price)
+        if 'close' not in df.columns:
+            logging.error(f"❌ 找不到 'close' 欄位！目前的欄位是: {df.columns.tolist()}")
+            return pd.DataFrame()
 
-        # 5. Add stock_id column
-        df['stock_id'] = stock_id
+        # 3. 計算移動平均線 (使用 'close')
+        df['ma_5'] = df['close'].rolling(window=5).mean()
+        df['ma_20'] = df['close'].rolling(window=20).mean()
 
-        # 6. Select relevant columns
-        cols: list[str] = ['stock_id', 'date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume', 'adj_close', 'ma5', 'ma20']
-        df = df[cols]
-        
-        # Ensure date is just DATE (not datetime with timezone)
-        df['date'] = pd.to_datetime(df['date']).dt.date
+        # 4. 處理 NaN (補 0)
+        df['ma_5'] = df['ma_5'].fillna(0)
+        df['ma_20'] = df['ma_20'].fillna(0)
 
+        logging.info(f"✅ {symbol} 資料轉換完成，新增 MA5, MA20")
         return df
+
     except Exception as e:
-        logger.error(f"Error transforming data: {str(e)}")
+        logging.error(f"❌ Transform 階段失敗: {e}")
+        # 印出更多資訊以供除錯
+        logging.error(f"錯誤發生時的 DataFrame 欄位: {df.columns.tolist()}")
         return pd.DataFrame()
