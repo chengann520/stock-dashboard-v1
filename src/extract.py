@@ -1,32 +1,61 @@
 import yfinance as yf
 import pandas as pd
 import logging
+from datetime import datetime
 
-# Configure logging
+# 設定日誌 (這是專業專案必備的，不要只用 print)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
-def fetch_stock_data(symbol: str, period: str = "1y") -> pd.DataFrame:
+def fetch_stock_data(stock_id: str) -> pd.DataFrame:
     """
-    Fetch stock data from yfinance.
+    從 Yahoo Finance 抓取指定股票的最新日資料。
     
     Args:
-        symbol: Stock ticker (e.g., '2330.TW', 'TSLA').
-        period: Time period (e.g., '1y', 'max').
+        stock_id (str): 股票代號 (e.g., "2330.TW", "TSLA")
         
     Returns:
-        pd.DataFrame: Fetched stock data or empty DataFrame on failure.
+        pd.DataFrame: 包含 OHLCV 數據的 DataFrame，若失敗則回傳空的 DataFrame
     """
+    logging.info(f"🚀 開始抓取股票數據: {stock_id}...")
+    
     try:
-        logger.info(f"Fetching data for {symbol} with period {period}...")
-        stock = yf.Ticker(symbol)
-        df: pd.DataFrame = stock.history(period=period)
+        # 1. 使用 yfinance 抓取 (period='1d' 代表只抓最近一天)
+        ticker = yf.Ticker(stock_id)
+        df = ticker.history(period="1d")
         
         if df.empty:
-            logger.warning(f"No data found for {symbol}.")
+            logging.warning(f"⚠️ 找不到 {stock_id} 的資料，可能是休市或代號錯誤。")
             return pd.DataFrame()
-            
-        return df
+
+        # 2. 資料清洗 (Data Cleaning)
+        # reset_index 以便把 Date 變成一個正常的欄位
+        df = df.reset_index()
+        
+        # 3. 欄位標準化：將欄位名稱改成全小寫，符合資料庫 SQL 習慣
+        # yfinance 給的是: Date, Open, High, Low, Close, Volume
+        df.columns = [c.lower() for c in df.columns]
+        
+        # 4. 加上 stock_id 欄位 (資料庫需要知道這是哪支股票)
+        df['stock_id'] = stock_id
+        
+        # 5. 確保日期格式是乾淨的字串 (YYYY-MM-DD)
+        df['date'] = df['date'].dt.date
+        
+        # 選取我們需要的欄位
+        target_columns = ['stock_id', 'date', 'open', 'high', 'low', 'close', 'volume']
+        # 檢查是否所有欄位都存在 (有些股票可能沒有 volume)
+        final_df = df[[c for c in target_columns if c in df.columns]]
+        
+        logging.info(f"✅ 成功抓取 {stock_id}，日期: {final_df.iloc[0]['date']}")
+        return final_df
+
     except Exception as e:
-        logger.error(f"Error fetching data for {symbol}: {str(e)}")
+        logging.error(f"❌ 抓取 {stock_id} 時發生嚴重錯誤: {e}")
         return pd.DataFrame()
+
+# --- 簡單的自我測試區塊 (當這個檔案被單獨執行時會跑) ---
+if __name__ == "__main__":
+    # 測試抓台積電
+    data = fetch_stock_data("2330.TW")
+    print("\n--- 測試結果 ---")
+    print(data)
