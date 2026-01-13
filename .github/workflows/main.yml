@@ -26,7 +26,8 @@ jobs:
         pip install pandas sqlalchemy psycopg2-binary python-dotenv
 
     # 4. 執行測試程式 (使用 Secret 中的密碼)
-    - name: Run connection test
-      env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      run: python test_db.py
+    - name: Install yfinance
+      run: pip install yfinance
+
+    - name: Run Extract Script
+      run: python src/extract.py
