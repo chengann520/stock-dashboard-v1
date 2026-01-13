@@ -6,22 +6,23 @@ from datetime import datetime
 # 設定日誌 (這是專業專案必備的，不要只用 print)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def fetch_stock_data(stock_id: str) -> pd.DataFrame:
+def fetch_stock_data(stock_id: str, period: str = "1mo") -> pd.DataFrame:
     """
     從 Yahoo Finance 抓取指定股票的最新日資料。
     
     Args:
         stock_id (str): 股票代號 (e.g., "2330.TW", "TSLA")
+        period (str): 抓取區間 (e.g., '1d', '5d', '1mo', '1y', 'max')
         
     Returns:
         pd.DataFrame: 包含 OHLCV 數據的 DataFrame，若失敗則回傳空的 DataFrame
     """
-    logging.info(f"🚀 開始抓取股票數據: {stock_id}...")
+    logging.info(f"🚀 開始抓取 {stock_id}，區間: {period}...")
     
     try:
-        # 1. 使用 yfinance 抓取 (period='1d' 代表只抓最近一天)
+        # 1. 使用 yfinance 抓取
         ticker = yf.Ticker(stock_id)
-        df = ticker.history(period="1d")
+        df = ticker.history(period=period)
         
         if df.empty:
             logging.warning(f"⚠️ 找不到 {stock_id} 的資料，可能是休市或代號錯誤。")
