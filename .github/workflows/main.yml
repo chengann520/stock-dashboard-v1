@@ -29,5 +29,7 @@ jobs:
     - name: Install yfinance
       run: pip install yfinance
 
-    - name: Run Extract Script
-      run: python src/extract.py
+    - name: Run ETL Pipeline
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      run: python main.py
