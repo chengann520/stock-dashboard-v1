@@ -42,9 +42,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🛡️ 全球精選標的監控儀表板 (Top 200)")
-st.markdown("---")
-
 # 2. 連線設定
 db_url = st.secrets.get("DATABASE_URL") or os.getenv("DATABASE_URL")
 if not db_url:
@@ -53,21 +50,19 @@ if not db_url:
 
 engine = create_engine(db_url)
 
-# 🟢 新增：檢查通知函式 (點擊按鈕更新 Session State)
-def check_notifications():
-    """
-    檢查資料庫中，是否有「最新日期」且「高信心看漲」的訊號
-    """
+# 🟢 改寫：通知函式 (只回傳資料，不負責畫圖)
+def get_ai_notifications():
+    """從資料庫抓取今日高信心的看漲訊號"""
     try:
-        # 1. 找出資料庫裡最新的日期
+        # 1. 找出最新日期
         date_query = text("SELECT MAX(date) FROM ai_analysis")
         with engine.connect() as conn:
             latest_date = conn.execute(date_query).scalar()
             
         if not latest_date:
-            return
+            return pd.DataFrame() # 沒資料回傳空表
 
-        # 2. 抓取該日期所有「看漲 (Bull)」且「信心 >= 70%」的股票
+        # 2. 抓取真實資料 (看漲 + 信心 > 70%)
         query = text("""
             SELECT a.stock_id, s.company_name, a.probability 
             FROM ai_analysis a
@@ -79,28 +74,43 @@ def check_notifications():
         """)
         
         with engine.connect() as conn:
-            df_notify = pd.read_sql(query, conn, params={"date": latest_date})
-
-        # 3. 顯示通知
-        if not df_notify.empty:
-            st.toast(f"🔔 AI 發現 {len(df_notify)} 檔潛力股！", icon="🚀")
+            df = pd.read_sql(query, conn, params={"date": latest_date})
             
-            st.sidebar.header("🔥 今日 AI 精選")
+        return df
+            
+    except Exception as e:
+        st.error(f"資料讀取錯誤: {e}")
+        return pd.DataFrame()
+
+# --- 頁面主佈局開始 ---
+
+# 1. 建立頂部兩欄佈局 (左邊標題，右邊通知)
+col_header, col_notify = st.columns([7, 3]) # 左7右3的比例
+
+with col_header:
+    st.title("� 台股戰情室")
+
+with col_notify:
+    # 2. 取得真實通知資料
+    df_notify = get_ai_notifications()
+    
+    if not df_notify.empty:
+        # 顯示一個漂亮的通知框 (Expander)
+        with st.expander(f"� AI 發現 {len(df_notify)} 檔飆股！", expanded=True):
             for _, row in df_notify.iterrows():
-                # 按鈕文字
+                # 按鈕標籤
                 btn_label = f"🚀 {row['probability']:.0%} | {row['stock_id']}"
                 if row['company_name'] and row['company_name'] != row['stock_id']:
                     btn_label += f" {row['company_name']}"
                 
-                # 如果使用者點擊了這個按鈕
-                if st.sidebar.button(btn_label, key=f"btn_{row['stock_id']}"):
+                # 點擊按鈕切換股票
+                if st.button(btn_label, key=f"top_btn_{row['stock_id']}"):
                     st.session_state['selected_stock_id'] = row['stock_id']
                     st.rerun()
-            
-            st.sidebar.markdown("---")
-            
-    except Exception as e:
-        st.error(f"通知系統錯誤: {e}")
+    else:
+        st.info("🍵 今日 AI 無特別訊號")
+
+st.markdown("---")
 
 # 3. 取得股票選單 (Cache 1hr)
 @st.cache_data(ttl=3600)
@@ -129,9 +139,6 @@ def get_stock_options():
 
 # 4. 側邊欄邏輯
 st.sidebar.header("🛠️ 監控控制台")
-
-# 🟢 A. 顯示 AI 通知按鈕 (會更新 session_state)
-check_notifications()
 
 # 🟢 B. 取得清單並決定下拉選單位置
 stock_ids, display_names = get_stock_options()
