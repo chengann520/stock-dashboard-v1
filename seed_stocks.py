@@ -66,12 +66,12 @@ def seed_data():
     
     with engine.begin() as conn:
         for stock in stocks_list:
-            # 注意：這裡將 company_name 修改為符合 schema.sql 的 stock_name
+            # 注意：這裡使用 company_name 以符合使用者資料表
             sql = text("""
-                INSERT INTO dim_stock (stock_id, stock_name)
+                INSERT INTO dim_stock (stock_id, company_name)
                 VALUES (:id, :name)
                 ON CONFLICT (stock_id) 
-                DO UPDATE SET stock_name = :name;
+                DO UPDATE SET company_name = :name;
             """)
             conn.execute(sql, {"id": stock["id"], "name": stock["name"]})
             
