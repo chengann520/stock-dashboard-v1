@@ -31,5 +31,6 @@ jobs:
 
     - name: Run ETL Pipeline
       env:
+        # 直接給它 Python 想要的那一把鑰匙
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
       run: python main.py
