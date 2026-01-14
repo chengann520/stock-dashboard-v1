@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS fact_price (
     adj_close DECIMAL(16, 4),
     ma_5 DECIMAL(16, 4),
     ma_20 DECIMAL(16, 4),
+    foreign_net BIGINT DEFAULT 0,
+    trust_net BIGINT DEFAULT 0,
+    dealer_net BIGINT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     -- Composite primary key to prevent duplicate entries for the same stock and date
     PRIMARY KEY (stock_id, date)
