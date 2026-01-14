@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from src.extract import extract_data
 from src.transform import transform_data
 from src.load import load_data
+from src.ai_model import train_and_predict
 
 # 設定 logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -66,8 +67,12 @@ def main():
             # Load
             load_data(df)
             
+            # 🤖 AI Analysis
+            logging.info(f"🤖 啟動 AI 分析: {symbol} ...")
+            train_and_predict(symbol)
+            
             success_count += 1
-            logging.info(f"✅ {symbol} 成功入庫")
+            logging.info(f"✅ {symbol} 處理完成 (ETL + AI)")
             
             # 😴 關鍵：每一支股票抓完休息 1~2 秒，避免被 Yahoo Finance 封鎖 IP
             time.sleep(1.5)
