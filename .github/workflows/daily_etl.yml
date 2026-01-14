@@ -26,6 +26,7 @@ jobs:
 
       - name: Run ETL Pipeline
         env:
-          # 關鍵修正：對應你的 Python 程式碼和 GitHub Secrets
+          # 直接給它 Python 想要的那一把鑰匙
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python main.py
+
