@@ -27,10 +27,16 @@ def load_data(df: pd.DataFrame):
         with engine.begin() as conn:
             # 💡 這裡使用了 'upsert' 技巧：
             # 如果資料已存在 (ON CONFLICT)，則更新 (DO UPDATE) 數值
-            # 1. 準備 SQL 指令 (加入了 ma_5 和 ma_20)
+            # 1. 準備 SQL 指令 (加入了 ma_5, ma_20 以及法人買賣超)
             sql = text("""
-                INSERT INTO fact_price (stock_id, date, open, high, low, close, volume, ma_5, ma_20)
-                VALUES (:stock_id, :date, :open, :high, :low, :close, :volume, :ma_5, :ma_20)
+                INSERT INTO fact_price (
+                    stock_id, date, open, high, low, close, volume, 
+                    ma_5, ma_20, foreign_net, trust_net, dealer_net
+                )
+                VALUES (
+                    :stock_id, :date, :open, :high, :low, :close, :volume, 
+                    :ma_5, :ma_20, :foreign_net, :trust_net, :dealer_net
+                )
                 ON CONFLICT (stock_id, date) 
                 DO UPDATE SET 
                     open = EXCLUDED.open,
@@ -38,8 +44,11 @@ def load_data(df: pd.DataFrame):
                     low = EXCLUDED.low,
                     close = EXCLUDED.close,
                     volume = EXCLUDED.volume,
-                    ma_5 = EXCLUDED.ma_5,   -- 這裡關鍵！強制更新 MA
-                    ma_20 = EXCLUDED.ma_20; -- 這裡關鍵！強制更新 MA
+                    ma_5 = EXCLUDED.ma_5,
+                    ma_20 = EXCLUDED.ma_20,
+                    foreign_net = EXCLUDED.foreign_net,
+                    trust_net = EXCLUDED.trust_net,
+                    dealer_net = EXCLUDED.dealer_net;
             """)
 
             # 2. 將 DataFrame 轉為字典列表以便寫入
