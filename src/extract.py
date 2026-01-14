@@ -4,9 +4,10 @@ import logging
 from datetime import datetime, timedelta
 from FinMind.data import DataLoader
 
-def extract_data(symbol: str, period: str = "1mo"):
+def extract_data(symbol: str, period: str = "2y"):
     """
     從 Yahoo Finance 抓股價 + 從 FinMind 抓三大法人
+    預設抓取 2 年資料以供 AI 充足訓練 (約 500 筆)
     """
     try:
         # 1. 先抓股價 (Yahoo Finance)
@@ -39,7 +40,8 @@ def extract_data(symbol: str, period: str = "1mo"):
                 
                 # 計算日期範圍 (配合 period)
                 end_date = datetime.now().strftime('%Y-%m-%d')
-                start_date = (datetime.now() - timedelta(days=40)).strftime('%Y-%m-%d') # 多抓一點避免缺漏
+                # 配合 2 年股價，籌碼也抓 2 年 (約 730 天)
+                start_date = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
                 
                 dl = DataLoader()
                 # 抓取「三大法人買賣」
