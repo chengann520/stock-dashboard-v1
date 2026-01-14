@@ -1,0 +1,30 @@
+name: Daily Market Close & Review
+
+on:
+  schedule:
+    # 台灣時間下午 17:00 (UTC 08:00)
+    # 這時候台股已經確定收盤，Yahoo Finance 資料也更新了
+    - cron: '0 8 * * 1-7'
+  workflow_dispatch:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas sqlalchemy psycopg2-binary python-dotenv yfinance
+
+      - name: Run Market Close Script
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python src/market_close.py
