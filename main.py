@@ -34,7 +34,7 @@ def main():
             processed_df = process_data(raw_df, symbol)
             
             # 3. Load
-            save_to_db(processed_df)
+            load_data(processed_df)
             
         except Exception as e:
             logging.error(f"❌ 處理 {symbol} 時發生未預期錯誤: {e}")
