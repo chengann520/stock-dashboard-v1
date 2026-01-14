@@ -2,7 +2,12 @@ import logging
 import sys
 from src.extract import fetch_stock_data
 from src.transform import process_data
-from src.load import save_to_db
+from src.load import load_data
+from dotenv import load_dotenv
+import os
+
+# 0. 載入環境變數 (本地測試用)
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
