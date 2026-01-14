@@ -226,7 +226,7 @@ if symbol:
         vol_val = f"{int(last_row[vol_col]):,}" if vol_col in df.columns else "N/A"
         c3.metric("今日成交量", vol_val)
         
-        # 🤖 顯示 AI 預測
+        # 🤖 顯示 AI 預測與策略建議
         ai_data = get_ai_signal(symbol)
         if ai_data:
             ai_signal = ai_data[0] # Bull or Bear
@@ -236,21 +236,21 @@ if symbol:
             target_p = float(ai_data[4]) if ai_data[4] else 0
             stop_p = float(ai_data[5]) if ai_data[5] else 0
             
-            if ai_signal == "Bull":
-                display_text = f"🐂 看多 ({prob:.0%})"
-            else:
-                display_text = f"🐻 看空 ({prob:.0%})"
+            st.markdown("---")
+            st.markdown("### 🤖 AI 策略建議")
             
-            c4.metric("AI 預測", display_text, f"更新: {ai_date}")
-
-            # 🟢 新增：交易計畫區
+            if ai_signal == "Bull":
+                st.success(f"🔥 強力看多 (信心度: {prob:.0%})")
+            else:
+                st.warning(f"❄️ 趨勢看空 (信心度: {prob:.0%})")
+                
             if entry_p > 0:
-                st.markdown("---")
-                st.subheader(f"🎯 {symbol} 交易作戰計畫")
-                p1, p2, p3 = st.columns(3)
-                p1.metric("建議買入位", f"{entry_p:.2f}", help="基於 ATR 波動率與 AI 信心度計算")
-                p2.metric("目標獲利位", f"{target_p:.2f}", f"預期漲幅: {((target_p/entry_p)-1):.1%}", delta_color="normal")
-                p3.metric("風險停損位", f"{stop_p:.2f}", f"最大回撤: {((stop_p/entry_p)-1):.1%}", delta_color="inverse")
+                c1pre, c2pre, c3pre = st.columns(3)
+                c1pre.metric("💰 建議入手價", f"{entry_p:.2f}")
+                c2pre.metric("🎯 目標獲利價", f"{target_p:.2f}", delta=f"{(target_p-entry_p):.2f}")
+                c3pre.metric("🛑 停損價格", f"{stop_p:.2f}")
+            
+            st.caption(f"數據更新時間: {ai_date} (價格基於 ATR 波動率計算)")
         else:
             c4.metric("AI 預測", "⏳ 計算中...")
 
