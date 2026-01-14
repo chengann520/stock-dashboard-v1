@@ -3,7 +3,7 @@
 -- Table: dim_stock (Dimension Table for Stocks)
 CREATE TABLE IF NOT EXISTS dim_stock (
     stock_id VARCHAR(20) PRIMARY KEY,
-    stock_name VARCHAR(100),
+    company_name VARCHAR(100),
     exchange VARCHAR(50),
     category VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
