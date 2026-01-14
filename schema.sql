@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS fact_price (
 
 -- Table: ai_analysis (AI Predictions and Analysis)
 CREATE TABLE IF NOT EXISTS ai_analysis (
+    id SERIAL PRIMARY KEY,
     stock_id VARCHAR(20) REFERENCES dim_stock(stock_id),
     date DATE,
     signal VARCHAR(10), -- 'Bull' or 'Bear'
@@ -38,8 +39,11 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
     entry_price DECIMAL(16, 4),
     target_price DECIMAL(16, 4),
     stop_loss DECIMAL(16, 4),
+    actual_close DECIMAL(16, 4),   -- 實際收盤價
+    is_correct BOOLEAN,           -- AI 猜對了嗎？
+    return_pct DECIMAL(8, 4),      -- 實際漲跌幅
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (stock_id, date)
+    UNIQUE (stock_id, date)
 );
 
 -- Index for performance
