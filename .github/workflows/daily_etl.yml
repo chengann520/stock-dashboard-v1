@@ -29,10 +29,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install "numpy<2.0.0" pandas
           if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
-          pip install --no-cache-dir https://github.com/twopirllc/pandas-ta/archive/main.zip
+          pip install pandas-ta
 
       # 4. 執行 ETL Pipeline
       - name: Run ETL Pipeline
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python main.py
+
