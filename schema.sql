@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
     date DATE,
     signal VARCHAR(10), -- 'Bull' or 'Bear'
     probability DECIMAL(5, 4),
+    entry_price DECIMAL(16, 4),
+    target_price DECIMAL(16, 4),
+    stop_loss DECIMAL(16, 4),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (stock_id, date)
 );
