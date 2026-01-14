@@ -22,7 +22,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install setuptools wheel pandas sqlalchemy psycopg2-binary python-dotenv yfinance tqdm
+          pip install --no-cache-dir setuptools wheel pandas sqlalchemy psycopg2-binary python-dotenv yfinance tqdm
 
       - name: Run Market Close Script
         env:
