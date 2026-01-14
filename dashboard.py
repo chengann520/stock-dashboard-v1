@@ -188,7 +188,7 @@ def get_ai_signal(stock_symbol):
     """讀取最新的 AI 預測"""
     try:
         query = text("""
-            SELECT signal, probability, date 
+            SELECT signal, probability, date, entry_price, target_price, stop_loss
             FROM ai_analysis 
             WHERE stock_id = :symbol 
             ORDER BY date DESC LIMIT 1
@@ -232,6 +232,9 @@ if symbol:
             ai_signal = ai_data[0] # Bull or Bear
             prob = float(ai_data[1])
             ai_date = ai_data[2]
+            entry_p = float(ai_data[3]) if ai_data[3] else 0
+            target_p = float(ai_data[4]) if ai_data[4] else 0
+            stop_p = float(ai_data[5]) if ai_data[5] else 0
             
             if ai_signal == "Bull":
                 display_text = f"🐂 看多 ({prob:.0%})"
@@ -239,6 +242,15 @@ if symbol:
                 display_text = f"🐻 看空 ({prob:.0%})"
             
             c4.metric("AI 預測", display_text, f"更新: {ai_date}")
+
+            # 🟢 新增：交易計畫區
+            if entry_p > 0:
+                st.markdown("---")
+                st.subheader(f"🎯 {symbol} 交易作戰計畫")
+                p1, p2, p3 = st.columns(3)
+                p1.metric("建議買入位", f"{entry_p:.2f}", help="基於 ATR 波動率與 AI 信心度計算")
+                p2.metric("目標獲利位", f"{target_p:.2f}", f"預期漲幅: {((target_p/entry_p)-1):.1%}", delta_color="normal")
+                p3.metric("風險停損位", f"{stop_p:.2f}", f"最大回撤: {((stop_p/entry_p)-1):.1%}", delta_color="inverse")
         else:
             c4.metric("AI 預測", "⏳ 計算中...")
 
