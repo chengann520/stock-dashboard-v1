@@ -1,5 +1,5 @@
 yfinance
-pandas==2.0.3
+pandas
 psycopg2-binary
 python-dotenv
 sqlalchemy
@@ -8,5 +8,5 @@ plotly
 FinMind
 xgboost
 scikit-learn
-pandas_ta==0.3.14b0
+pandas_ta
 tqdm
