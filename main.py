@@ -4,7 +4,7 @@ import time
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
-# 引入你原本寫好的模組
+# 引入你的模組 (假設檔案結構沒變)
 from src.extract import extract_data
 from src.transform import transform_data
 from src.load import load_data
@@ -13,61 +13,70 @@ from src.load import load_data
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def get_stock_list_from_db():
-    """從 dim_stock 資料表讀取所有要抓的股票"""
+    """
+    從 dim_stock 資料表取得所有股票代碼
+    """
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        raise ValueError("DATABASE_URL 未設定")
+        logging.error("❌ DATABASE_URL 未設定")
+        return []
         
-    engine = create_engine(db_url)
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT stock_id FROM dim_stock"))
-        # 轉換成列表 ['2330.TW', '2317.TW'...]
-        return [row[0] for row in result]
+    try:
+        engine = create_engine(db_url)
+        with engine.connect() as conn:
+            # 只要抓 stock_id 就好
+            result = conn.execute(text("SELECT stock_id FROM dim_stock"))
+            # 將結果轉換成一個 list，例如 ['2330.TW', '0050.TW', ...]
+            stock_list = [row[0] for row in result]
+            return stock_list
+    except Exception as e:
+        logging.error(f"❌ 無法從資料庫讀取股票清單: {e}")
+        return []
 
 def main():
     load_dotenv()
     
-    try:
-        # 1. 動態取得股票清單
-        symbols = get_stock_list_from_db()
-        logging.info(f"🎯 本次任務目標：共 {len(symbols)} 檔股票")
-        
-        if not symbols:
-            logging.warning("⚠️ 資料庫中沒有股票清單，請先執行 seed_stocks.py")
-            return
+    logging.info("🚀 ETL 程式啟動...")
 
-        # 2. 逐一處理
-        success_count = 0
-        for symbol in symbols:
-            try:
-                logging.info(f"🚀 處理中: {symbol} ...")
-                
-                # Extract
-                df = extract_data(symbol)
-                if df is None or df.empty:
-                    logging.warning(f"⚠️ {symbol} 抓不到資料，跳過")
-                    continue
-                
-                # Transform
-                df = transform_data(df)
-                
-                # Load
-                load_data(df)
-                
-                success_count += 1
-                logging.info(f"✅ {symbol} 完成")
-                
-                # 😴 關鍵：休息 1 秒，避免被封鎖
-                time.sleep(1)
-                
-            except Exception as e:
-                logging.error(f"❌ {symbol} 發生錯誤: {e}")
-                continue # 繼續做下一支，不要停
+    # 1. 改成從資料庫動態取得清單
+    symbols = get_stock_list_from_db()
+    
+    if not symbols:
+        logging.warning("⚠️ 警告：資料庫回傳的股票清單是空的！(請確認 dim_stock 有資料)")
+        # 如果資料庫沒資料，這裡可以放一個保險的預設名單，或直接結束
+        return
 
-        logging.info(f"🎉 任務結束！成功處理 {success_count}/{len(symbols)} 檔")
+    logging.info(f"🎯 本次任務目標：共 {len(symbols)} 檔股票")
 
-    except Exception as e:
-        logging.error(f"💥 系統嚴重錯誤: {e}")
+    # 2. 開始逐一處理
+    success_count = 0
+    for i, symbol in enumerate(symbols, 1):
+        try:
+            logging.info(f"[{i}/{len(symbols)}] 正在處理: {symbol} ...")
+            
+            # Extract
+            df = extract_data(symbol)
+            if df is None or df.empty:
+                logging.warning(f"⚠️ {symbol} 抓不到資料 (可能是下市或代碼錯誤)，跳過")
+                continue
+            
+            # Transform
+            df = transform_data(df)
+            
+            # Load
+            load_data(df)
+            
+            success_count += 1
+            logging.info(f"✅ {symbol} 成功入庫")
+            
+            # 😴 關鍵：每一支股票抓完休息 1~2 秒，避免被 Yahoo Finance 封鎖 IP
+            time.sleep(1.5)
+            
+        except Exception as e:
+            logging.error(f"❌ {symbol} 處理失敗: {e}")
+            continue # 失敗就換下一支，不要讓整個程式停掉
+
+    logging.info(f"🎉 所有任務結束！成功處理 {success_count}/{len(symbols)} 檔")
 
 if __name__ == "__main__":
     main()
