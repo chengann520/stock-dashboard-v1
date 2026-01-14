@@ -1,19 +1,8 @@
-修改 src/extract.py (抓取籌碼資料)
-我們要修改 extract_data 函式。邏輯是：
-
-如果是台股 (.TW 或 .TWO)，就額外呼叫 FinMind 抓籌碼。
-
-如果是美股 (TSLA, AAPL)，就跳過（美股沒有這種定義的法人資料）。
-
-請用這段程式碼 取代 原本的 src/extract.py：
-
-Python
-
 import yfinance as yf
 import pandas as pd
 import logging
 from datetime import datetime, timedelta
-from FinMind.data import DataLoader # 引入 FinMind
+from FinMind.data import DataLoader
 
 def extract_data(symbol: str, period: str = "1mo"):
     """
@@ -83,7 +72,9 @@ def extract_data(symbol: str, period: str = "1mo"):
                     # Investment_Trust -> trust_net (投信)
                     # Dealer_Self / Dealer_Hedging -> dealer_net (自營商合計)
                     
-                    pivot_df['dealer_net'] = pivot_df.get('Dealer_Self', 0) + pivot_df.get('Dealer_Hedging', 0)
+                    # 先把可能存在的欄位加總給 dealer
+                    dealer_cols = [c for c in pivot_df.columns if 'Dealer' in c]
+                    pivot_df['dealer_net'] = pivot_df[dealer_cols].sum(axis=1) if dealer_cols else 0
                     
                     # 重新命名與選取
                     rename_map = {
@@ -98,6 +89,7 @@ def extract_data(symbol: str, period: str = "1mo"):
                             pivot_df[col] = 0
                             
                     # 3. 合併 (Merge) 股價與籌碼
+                    # 使用 left join，以股價日期為主
                     df_final = pd.merge(df_price, pivot_df[['date', 'foreign_net', 'trust_net', 'dealer_net']], on='date', how='left')
                     
                     # 補 0 (避免 NaN)
@@ -107,7 +99,7 @@ def extract_data(symbol: str, period: str = "1mo"):
 
             except Exception as e:
                 logging.warning(f"⚠️ {symbol} 籌碼抓取失敗 (但股價已抓到): {e}")
-                # 就算籌碼失敗，還是回傳股價
+                # 就算籌碼失敗，還是回傳股價，補 0
                 df_price['foreign_net'] = 0
                 df_price['trust_net'] = 0
                 df_price['dealer_net'] = 0
