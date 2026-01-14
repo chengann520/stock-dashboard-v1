@@ -17,6 +17,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# 🟢 初始化 Session State (如果沒有設定過，預設為台積電)
+if 'selected_stock_id' not in st.session_state:
+    st.session_state['selected_stock_id'] = '2330.TW'
+
 # 自定義 CSS 提升質感
 st.markdown("""
     <style>
@@ -49,13 +53,13 @@ if not db_url:
 
 engine = create_engine(db_url)
 
-# 🟢 新增：檢查通知函式
+# 🟢 新增：檢查通知函式 (點擊按鈕更新 Session State)
 def check_notifications():
     """
     檢查資料庫中，是否有「最新日期」且「高信心看漲」的訊號
     """
     try:
-        # 1. 找出資料庫裡最新的日期 (確保我們看的是今天的，不是昨天的)
+        # 1. 找出資料庫裡最新的日期
         date_query = text("SELECT MAX(date) FROM ai_analysis")
         with engine.connect() as conn:
             latest_date = conn.execute(date_query).scalar()
@@ -79,19 +83,21 @@ def check_notifications():
 
         # 3. 顯示通知
         if not df_notify.empty:
-            # A. 彈跳視窗 (Toast) - 右下角短暫顯示
-            st.toast(f"🔔 AI 發現 {len(df_notify)} 檔潛力股！請查看側邊欄。", icon="🚀")
+            st.toast(f"🔔 AI 發現 {len(df_notify)} 檔潛力股！", icon="🚀")
             
-            # B. 側邊欄通知區 (醒目顯示)
             st.sidebar.header("🔥 今日 AI 精選")
             for _, row in df_notify.iterrows():
-                # 顯示格式：[85%] 2330.TW | 台積電
-                msg = f"**{row['probability']:.0%}** | {row['stock_id']}"
+                # 按鈕文字
+                btn_label = f"🚀 {row['probability']:.0%} | {row['stock_id']}"
                 if row['company_name'] and row['company_name'] != row['stock_id']:
-                    msg += f" {row['company_name']}"
-                st.sidebar.success(msg) # 綠色框框
+                    btn_label += f" {row['company_name']}"
+                
+                # 如果使用者點擊了這個按鈕
+                if st.sidebar.button(btn_label, key=f"btn_{row['stock_id']}"):
+                    st.session_state['selected_stock_id'] = row['stock_id']
+                    st.rerun()
             
-            st.sidebar.markdown("---") # 分隔線
+            st.sidebar.markdown("---")
             
     except Exception as e:
         st.error(f"通知系統錯誤: {e}")
@@ -100,44 +106,58 @@ def check_notifications():
 @st.cache_data(ttl=3600)
 def get_stock_options():
     try:
-        # 讀取代號與名稱
         query = text("SELECT stock_id, company_name FROM dim_stock ORDER BY stock_id")
         with engine.connect() as conn:
             df = pd.read_sql(query, conn)
         
-        display_list = []
-        mapping = {}
+        ids = []
+        display_names = []
         
         for _, row in df.iterrows():
-            # 如果名稱跟代碼一樣，就只顯示代碼，否則顯示 代碼 | 名稱
             if row['stock_id'] == row['company_name']:
-                display_name = f"🔍 {row['stock_id']}"
+                d_name = f"{row['stock_id']}"
             else:
-                display_name = f"📊 {row['stock_id']} | {row['company_name']}"
+                d_name = f"{row['stock_id']} | {row['company_name']}"
                 
-            display_list.append(display_name)
-            mapping[display_name] = row['stock_id']
+            ids.append(row['stock_id'])
+            display_names.append(d_name)
             
-        return display_list, mapping
+        return ids, display_names
     except Exception as e:
         st.error(f"讀取清單失敗: {e}")
-        return [], {}
+        return [], []
 
-# 4. 側邊欄設計
+# 4. 側邊欄邏輯
 st.sidebar.header("🛠️ 監控控制台")
 
-# 🟢 在程式主邏輯開始前，先跑通知
+# 🟢 A. 顯示 AI 通知按鈕 (會更新 session_state)
 check_notifications()
 
-display_options, name_to_id_map = get_stock_options()
+# 🟢 B. 取得清單並決定下拉選單位置
+stock_ids, display_names = get_stock_options()
 
-if display_options:
+if stock_ids:
+    try:
+        current_index = stock_ids.index(st.session_state['selected_stock_id'])
+    except ValueError:
+        current_index = 0
+
     selected_display = st.sidebar.selectbox(
         '請輸入代碼或選擇股票：',
-        display_options,
+        display_names,
+        index=current_index,
         help="支援搜尋功能，直接輸入代碼即可快速篩選"
     )
-    symbol = name_to_id_map[selected_display]
+    
+    # 從顯示名稱取出代碼
+    selected_symbol_from_box = selected_display.split(" | ")[0]
+
+    # 🟢 C. 如果選單變動，更新 Session State 並重整
+    if selected_symbol_from_box != st.session_state['selected_stock_id']:
+        st.session_state['selected_stock_id'] = selected_symbol_from_box
+        st.rerun()
+        
+    symbol = st.session_state['selected_stock_id']
 else:
     st.sidebar.warning("⚠️ 資料庫中無股票清單")
     symbol = None
@@ -206,7 +226,7 @@ if symbol:
         vol_val = f"{int(last_row[vol_col]):,}" if vol_col in df.columns else "N/A"
         c3.metric("今日成交量", vol_val)
         
-        # 🤖 顯示 AI 訊號
+        # 🤖 顯示 AI 預測
         ai_data = get_ai_signal(symbol)
         if ai_data:
             ai_signal = ai_data[0] # Bull or Bear
@@ -256,13 +276,11 @@ if symbol:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # 🟢 新增：法人買賣超 (Bar Chart)
+        # 🟢 法人買賣超 (Bar Chart)
         if 'foreign_net' in df.columns and symbol and (".TW" in symbol or ".TWO" in symbol):
             st.subheader("🏦 三大法人買賣超 (單位: 股)")
             
             chip_fig = go.Figure()
-            
-            # 判斷是否有數據 (避免全 0 的狀況顯示得很空)
             has_chip_data = (df['foreign_net'].abs().sum() + df['trust_net'].abs().sum() + df['dealer_net'].abs().sum()) > 0
             
             if has_chip_data:
@@ -278,7 +296,7 @@ if symbol:
 
                 chip_fig.update_layout(
                     template='plotly_white',
-                    barmode='group', # 分組顯示 (並排)
+                    barmode='group',
                     xaxis_title="日期",
                     yaxis_title="買賣超股數",
                     height=400,
