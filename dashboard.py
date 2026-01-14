@@ -167,6 +167,41 @@ if st.sidebar.button("🔄 強制清空快取 & 更新"):
     st.cache_data.clear()
     st.rerun()
 
+# 📊 AI 戰績統計
+st.sidebar.markdown("---")
+st.sidebar.header("📊 AI 戰績統計")
+
+def get_ai_accuracy():
+    try:
+        with engine.connect() as conn:
+            # 計算總準確率
+            sql = text("""
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as wins
+                FROM ai_analysis
+                WHERE is_correct IS NOT NULL
+            """)
+            result = conn.execute(sql).fetchone()
+            
+            if result and result[0] > 0:
+                return float(result[1]) / float(result[0])
+            return 0
+    except Exception:
+        return 0
+
+acc = get_ai_accuracy()
+st.sidebar.metric("歷史預測準確率 (Win Rate)", f"{acc:.1%}")
+
+if acc > 0.6:
+    st.sidebar.success("模型表現優異！🚀")
+elif acc > 0.5:
+    st.sidebar.warning("模型表現尚可 😐")
+elif acc > 0:
+    st.sidebar.error("模型需要再訓練 📉")
+else:
+    st.sidebar.info("尚未有足夠驗證資料 ⏳")
+
 # 5. 數據載入 (Cache 10min)
 @st.cache_data(ttl=600)
 def load_data(stock_symbol):
