@@ -1,3 +1,5 @@
+setuptools
+wheel
 yfinance
 pandas
 psycopg2-binary
