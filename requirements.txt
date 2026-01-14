@@ -1,3 +1,4 @@
+numpy<2.0.0
 setuptools
 wheel
 yfinance
@@ -11,5 +12,3 @@ FinMind
 xgboost
 scikit-learn
 tqdm
-
-
