@@ -1,27 +1,12 @@
-# === 基礎套件 ===
-pandas
-sqlalchemy
+yfinance
+pandas==2.0.3
 psycopg2-binary
 python-dotenv
-requests
-tqdm
-
-# === 爬蟲與資料源 ===
-yfinance
-twstock
-FinMind
-
-# === 網站與圖表 ===
-plotly
+sqlalchemy
 streamlit
-
-# === AI 與 機器學習 ===
+plotly
+FinMind
 xgboost
 scikit-learn
-
-# === ⚠️ 關鍵修正區 (請勿更動) ===
-# 1. 限制 numpy 版本 (因為 pandas_ta 不支援最新的 numpy 2.0)
-numpy<2.0.0
-
-# 2. 使用 ZIP 下載方式安裝 pandas_ta (解決 git clone 失敗問題)
-https://github.com/twopirllc/pandas-ta/archive/development.zip
+pandas_ta==0.3.14b0
+tqdm
