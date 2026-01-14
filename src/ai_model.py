@@ -1,4 +1,5 @@
 import os
+import requests
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
@@ -7,123 +8,155 @@ from xgboost import XGBClassifier
 import logging
 from dotenv import load_dotenv
 
-# 載入環境變數 (本地測試用)
+# 載入環境變數
 load_dotenv()
 
-# 設定 Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# --- 通知函式 ---
+def send_line_message(msg):
+    token = os.getenv("LINE_CHANNEL_TOKEN")
+    user_id = os.getenv("LINE_USER_ID")
+    if not token or not user_id: return
+    
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+    payload = {"to": user_id, "messages": [{"type": "text", "text": msg}]}
+    try:
+        requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload)
+        logging.info("📤 LINE 通知已發送")
+    except Exception as e: 
+        logging.warning(f"⚠️ LINE 通知發送失敗: {e}")
+
+# --- 主程式 ---
 def fetch_data(stock_id, engine):
-    """從資料庫讀取該股票的歷史數據"""
     query = text("""
         SELECT date, open, high, low, close, volume, foreign_net, trust_net 
-        FROM fact_price 
-        WHERE stock_id = :stock_id 
-        ORDER BY date ASC
+        FROM fact_price WHERE stock_id = :stock_id ORDER BY date ASC
     """)
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, params={"stock_id": stock_id})
     return df
 
 def train_and_predict(stock_id):
-    """訓練 AI 並預測明天的走勢"""
     db_url = os.getenv("DATABASE_URL")
-    if not db_url:
+    if not db_url: 
         logging.error("❌ DATABASE_URL 未設定")
         return
-
     engine = create_engine(db_url)
     
     # 1. 抓取數據
     df = fetch_data(stock_id, engine)
-    if len(df) < 60: # 資料太少不訓練
-        logging.warning(f"⚠️ {stock_id} 資料不足 (目前僅 {len(df)} 筆)，跳過 AI 訓練")
+    if len(df) < 60: 
+        logging.warning(f"⚠️ {stock_id} 資料不足，跳過 AI 訓練")
         return
 
-    # 2. 特徵工程 (Feature Engineering)
-    # 技術面
+    # 2. 特徵工程 (加入 ATR)
     df['RSI'] = ta.rsi(df['close'], length=14)
     macd_res = ta.macd(df['close'])
-    # 適應不同版本的 pandas_ta 欄位名稱
     macd_col = 'MACD_12_26_9' if 'MACD_12_26_9' in macd_res.columns else macd_res.columns[0]
     df['MACD'] = macd_res[macd_col]
     
-    # 籌碼面 (簡化版)
-    df['Trust_Buy'] = np.where(df['trust_net'] > 0, 1, 0)
+    # 🟢 新增：ATR (計算波動率)
+    df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     
-    # 滯後特徵 (讓 AI 看到過去 3 天的變化)
+    df['Trust_Buy'] = np.where(df['trust_net'] > 0, 1, 0)
     for lag in [1, 2, 3]:
         df[f'Pct_Change_{lag}'] = df['close'].pct_change(lag)
-    
-    # 清除空值
     df.dropna(inplace=True)
 
-    if df.empty:
-        logging.warning(f"⚠️ {stock_id} 經過特徵工程後無有效數據")
-        return
+    if df.empty: return
 
-    # 3. 準備訓練資料
-    # 目標: 預測「明天」收盤價是否 > 「今天」收盤價
+    # 3. 訓練模型
     df['Target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)
-    
-    # 用來訓練的欄位
     features = ['RSI', 'MACD', 'Trust_Buy', 'Pct_Change_1', 'Pct_Change_2', 'Pct_Change_3']
     
-    # 切分訓練集 (拿最新的那一筆當作「今天要預測明天」的題目)
-    # 我們用過去的所有資料來訓練模型
-    X = df[features][:-1]      # 排除最後一筆 (因為最後一筆沒有 Target)
+    X = df[features][:-1]
     y = df['Target'][:-1]
-    
-    # 要預測的當下數據 (最新的那一筆)
     latest_data = df[features].iloc[[-1]]
+    
+    # 取得最新價格數據 (用來算策略)
+    last_close = float(df['close'].iloc[-1])
+    # 處理 ATR 可能為 NaN 的情況
+    last_atr = float(df['ATR'].iloc[-1]) if pd.notnull(df['ATR'].iloc[-1]) else last_close * 0.02
     current_date = df['date'].iloc[-1]
 
-    # 4. 訓練 XGBoost 模型
     model = XGBClassifier(n_estimators=100, learning_rate=0.05, max_depth=3, eval_metric='logloss')
     model.fit(X, y)
     
-    # 5. 進行預測
-    prediction = model.predict(latest_data)[0]       # 0 或 1
-    proba = model.predict_proba(latest_data)[0][1]   # 看漲的機率 (0.0 ~ 1.0)
-    
+    prediction = model.predict(latest_data)[0]
+    proba = float(model.predict_proba(latest_data)[0][1])
     signal = "Bull" if prediction == 1 else "Bear"
     
-    logging.info(f"🤖 {stock_id} AI 預測: {signal} (看漲機率: {proba:.2f})")
+    # 🟢 4. 計算進出場價格 (策略生成)
+    entry_price = 0.0
+    target_price = 0.0
+    stop_loss = 0.0
 
-    # 6. 存入資料庫
-    save_prediction(engine, stock_id, current_date, signal, proba)
+    if signal == "Bull":
+        # 根據信心度調整策略
+        if proba > 0.8: 
+            # 信心高：積極進攻
+            entry_price = last_close
+            target_price = last_close + (2.0 * last_atr)
+            stop_loss = last_close - (1.0 * last_atr)
+        else:
+            # 信心低：保守操作
+            entry_price = last_close - (0.5 * last_atr)
+            target_price = last_close + (1.0 * last_atr)
+            stop_loss = last_close - (1.0 * last_atr)
+            
+    elif signal == "Bear":
+        # 預測會跌，在支撐處等
+        entry_price = last_close - (2.0 * last_atr)
+        target_price = last_close
+        stop_loss = entry_price * 0.95
 
-def save_prediction(engine, stock_id, date, signal, proba):
-    """將預測結果寫入 ai_analysis 表"""
+    logging.info(f"🤖 {stock_id} 預測: {signal} ({proba:.2f}) | 建議買: {entry_price:.1f} 賣: {target_price:.1f}")
+
+    # 5. 存入資料庫 (包含價格)
+    save_prediction(engine, stock_id, current_date, signal, proba, entry_price, target_price, stop_loss)
+
+    # 6. 發送通知 (只通知高信心的)
+    if signal == "Bull" and proba >= 0.80:
+        msg = (
+            f"🚀 【AI 飆股訊號】\n"
+            f"股票：{stock_id}\n"
+            f"信心：{proba:.1%}\n"
+            f"------------------\n"
+            f"💰 建議買入：{entry_price:.1f}\n"
+            f"🎯 目標獲利：{target_price:.1f}\n"
+            f"🛑 停損價格：{stop_loss:.1f}\n"
+            f"------------------\n"
+            f"(基於 ATR 波動率計算)"
+        )
+        send_line_message(msg)
+
+def save_prediction(engine, stock_id, date, signal, proba, entry, target, stop):
     try:
         with engine.begin() as conn:
-            # 確保 ai_analysis 表格存在 (防呆)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS ai_analysis (
-                    stock_id VARCHAR(20),
-                    date DATE,
-                    signal VARCHAR(10),
-                    probability DECIMAL(5, 4),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (stock_id, date)
-                );
-            """))
-            
+            # 確保欄位存在 (防呆)
+            sql_check = text("""
+                ALTER TABLE ai_analysis ADD COLUMN IF NOT EXISTS entry_price DECIMAL(16, 4);
+                ALTER TABLE ai_analysis ADD COLUMN IF NOT EXISTS target_price DECIMAL(16, 4);
+                ALTER TABLE ai_analysis ADD COLUMN IF NOT EXISTS stop_loss DECIMAL(16, 4);
+            """)
+            conn.execute(sql_check)
+
             sql = text("""
-                INSERT INTO ai_analysis (stock_id, date, signal, probability)
-                VALUES (:stock_id, :date, :signal, :proba)
+                INSERT INTO ai_analysis (stock_id, date, signal, probability, entry_price, target_price, stop_loss)
+                VALUES (:sid, :dt, :sig, :prob, :entry, :target, :stop)
                 ON CONFLICT (stock_id, date) 
-                DO UPDATE SET signal = :signal, probability = :proba, created_at = CURRENT_TIMESTAMP;
+                DO UPDATE SET 
+                    signal = :sig, probability = :prob, 
+                    entry_price = :entry, target_price = :target, stop_loss = :stop,
+                    created_at = CURRENT_TIMESTAMP;
             """)
             conn.execute(sql, {
-                "stock_id": stock_id,
-                "date": date,
-                "signal": signal,
-                "proba": float(proba)
+                "sid": stock_id, "dt": date, "sig": signal, "prob": float(proba),
+                "entry": float(entry), "target": float(target), "stop": float(stop)
             })
     except Exception as e:
-        logging.error(f"❌ 寫入 AI 預測資料庫失敗: {e}")
+        logging.error(f"❌ 寫入資料庫失敗: {e}")
 
 if __name__ == "__main__":
-    # 本地測試用
     train_and_predict("2330.TW")
