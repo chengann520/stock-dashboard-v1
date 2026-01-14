@@ -114,6 +114,21 @@ def load_data(stock_symbol):
         st.error(f"資料庫讀取失敗: {e}")
         return pd.DataFrame()
 
+def get_ai_signal(stock_symbol):
+    """讀取最新的 AI 預測"""
+    try:
+        query = text("""
+            SELECT signal, probability, date 
+            FROM ai_analysis 
+            WHERE stock_id = :symbol 
+            ORDER BY date DESC LIMIT 1
+        """)
+        with engine.connect() as conn:
+            result = conn.execute(query, {"symbol": stock_symbol}).fetchone()
+        return result
+    except Exception:
+        return None
+
 # 6. 主要顯示邏輯
 if symbol:
     df = load_data(symbol)
@@ -141,8 +156,21 @@ if symbol:
         vol_val = f"{int(last_row[vol_col]):,}" if vol_col in df.columns else "N/A"
         c3.metric("今日成交量", vol_val)
         
-        update_time = last_row['date'] if 'date' in last_row else "Unknown"
-        c4.metric("數據日期", str(update_time))
+        # 🤖 顯示 AI 訊號
+        ai_data = get_ai_signal(symbol)
+        if ai_data:
+            ai_signal = ai_data[0] # Bull or Bear
+            prob = float(ai_data[1])
+            ai_date = ai_data[2]
+            
+            if ai_signal == "Bull":
+                display_text = f"🐂 看多 ({prob:.0%})"
+            else:
+                display_text = f"🐻 看空 ({prob:.0%})"
+            
+            c4.metric("AI 預測", display_text, f"更新: {ai_date}")
+        else:
+            c4.metric("AI 預測", "⏳ 計算中...")
 
         # B. 走勢圖表
         st.subheader(f"📈 {symbol} 價量趨勢分析")
