@@ -13,14 +13,14 @@ CREATE TABLE IF NOT EXISTS dim_stock (
 CREATE TABLE IF NOT EXISTS fact_price (
     stock_id VARCHAR(20) REFERENCES dim_stock(stock_id),
     date DATE,
-    open_price DECIMAL(16, 4),
-    high_price DECIMAL(16, 4),
-    low_price DECIMAL(16, 4),
-    close_price DECIMAL(16, 4),
+    open DECIMAL(16, 4),
+    high DECIMAL(16, 4),
+    low DECIMAL(16, 4),
+    close DECIMAL(16, 4),
     volume BIGINT,
     adj_close DECIMAL(16, 4),
-    ma5 DECIMAL(16, 4),
-    ma20 DECIMAL(16, 4),
+    ma_5 DECIMAL(16, 4),
+    ma_20 DECIMAL(16, 4),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     -- Composite primary key to prevent duplicate entries for the same stock and date
     PRIMARY KEY (stock_id, date)
