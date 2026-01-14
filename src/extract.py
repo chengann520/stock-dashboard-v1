@@ -6,7 +6,7 @@ from datetime import datetime
 # 設定日誌 (這是專業專案必備的，不要只用 print)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def fetch_stock_data(stock_id: str, period: str = "1mo") -> pd.DataFrame:
+def extract_data(stock_id: str, period: str = "1mo") -> pd.DataFrame:
     """
     從 Yahoo Finance 抓取指定股票的最新日資料。
     
