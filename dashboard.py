@@ -178,6 +178,39 @@ if symbol:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+        # 🟢 新增：法人買賣超 (Bar Chart)
+        if 'foreign_net' in df.columns and symbol and (".TW" in symbol or ".TWO" in symbol):
+            st.subheader("🏦 三大法人買賣超 (單位: 股)")
+            
+            chip_fig = go.Figure()
+            
+            # 判斷是否有數據 (避免全 0 的狀況顯示得很空)
+            has_chip_data = (df['foreign_net'].abs().sum() + df['trust_net'].abs().sum() + df['dealer_net'].abs().sum()) > 0
+            
+            if has_chip_data:
+                chip_fig.add_trace(go.Bar(
+                    x=df['date'], y=df['foreign_net'], name='外資', marker_color='purple'
+                ))
+                chip_fig.add_trace(go.Bar(
+                    x=df['date'], y=df['trust_net'], name='投信', marker_color='red'
+                ))
+                chip_fig.add_trace(go.Bar(
+                    x=df['date'], y=df['dealer_net'], name='自營商', marker_color='gray'
+                ))
+
+                chip_fig.update_layout(
+                    template='plotly_white',
+                    barmode='group', # 分組顯示 (並排)
+                    xaxis_title="日期",
+                    yaxis_title="買賣超股數",
+                    height=400,
+                    margin=dict(l=20, r=20, t=30, b=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                st.plotly_chart(chip_fig, use_container_width=True)
+            else:
+                st.info("💡 目前尚無籌碼數據 (三大法人資料通常在 15:00 ~ 16:30 更新)")
+
         # C. 詳細數據區
         with st.expander("📊 查看歷史數據明細"):
             st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
