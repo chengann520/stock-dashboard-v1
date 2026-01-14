@@ -24,8 +24,8 @@ engine = create_engine(db_url)
 @st.cache_data(ttl=3600)  # 快取 1 小時
 def get_stock_options():
     try:
-        # 注意：這裡使用 stock_name 以符合 schema.sql
-        query = text("SELECT stock_id, stock_name FROM dim_stock ORDER BY stock_id")
+        # 修正：欄位名稱是 company_name
+        query = text("SELECT stock_id, company_name FROM dim_stock ORDER BY stock_id")
         with engine.connect() as conn:
             df = pd.read_sql(query, conn)
         
@@ -33,7 +33,8 @@ def get_stock_options():
         mapping = {}
         
         for _, row in df.iterrows():
-            display_name = f"{row['stock_id']} | {row['stock_name']}"
+            # 這裡也要記得改用 company_name
+            display_name = f"{row['stock_id']} | {row['company_name']}"
             display_list.append(display_name)
             mapping[display_name] = row['stock_id']
             
