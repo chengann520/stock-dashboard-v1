@@ -2,9 +2,9 @@ name: Daily Market Close & Review
 
 on:
   schedule:
-    # 台灣時間下午 17:00 (UTC 08:00)
-    # 這時候台股已經確定收盤，Yahoo Finance 資料也更新了
-    - cron: '0 8 * * 1-7'
+    # 台灣時間下午 16:00 (UTC 08:00) 
+    # 修正重點：將 1-7 改為 1-5 (週一到週五)，因為週末股市不開盤
+    - cron: '0 8 * * 1-5'
   workflow_dispatch:
 
 jobs:
