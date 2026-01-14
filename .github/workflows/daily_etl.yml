@@ -5,13 +5,13 @@ on:
     # 說明：UTC 時間 0點~5點，每 30 分鐘執行一次
     # 對應台灣時間：早上 08:00 ~ 下午 13:30
     - cron: '*/30 0-5 * * 1-5'
-    
+
   workflow_dispatch: # 允許手動按按鈕測試
 
 jobs:
   etl:
     runs-on: ubuntu-latest
-    
+
     steps:
       # 1. 下載你的程式碼
       - name: Checkout Code
@@ -25,19 +25,16 @@ jobs:
 
       # 3. 安裝套件
       - name: Install dependencies
-     run: |
-       python -m pip install --upgrade pip setuptools wheel
-       pip install "numpy<2.0.0"
-       pip install "numba<0.60"
-       pip install pandas
-       if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
-       pip install pandas-ta==0.3.14b0 --no-build-isolation
-
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install "numpy<2.0.0"
+          pip install "numba<0.60"
+          pip install pandas
+          if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+          pip install pandas-ta==0.3.14b0 --no-build-isolation
 
       # 4. 執行 ETL Pipeline
-   - name: Run ETL Pipeline
+      - name: Run ETL Pipeline
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python main.py
-
-
