@@ -5,3 +5,7 @@ python-dotenv
 sqlalchemy
 streamlit
 plotly
+FinMind
+xgboost
+scikit-learn
+pandas_ta
