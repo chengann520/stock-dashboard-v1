@@ -2,9 +2,9 @@ name: Daily Stock ETL
 
 on:
   schedule:
-    # 說明：UTC 時間 0點~5點，每 30 分鐘執行一次
-    # 對應台灣時間：早上 08:00 ~ 下午 13:30
-    - cron: '*/30 0-5 * * 1-5'
+    # 說明：UTC 時間 0點~6點，每 1 小時執行一次
+    # 對應台灣時間：早上 08:00 ~ 下午 14:00
+    - cron: '0 0-6 * * 1-5'
 
   workflow_dispatch: # 允許手動按按鈕測試
 
@@ -36,5 +36,4 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python main.py
-
 
