@@ -1,13 +1,17 @@
 import pandas as pd
 import logging
 
-def process_data(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+def transform_data(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     """
     資料清洗與技術指標計算 (Transform Layer)
     """
     try:
         if df.empty:
             return pd.DataFrame()
+
+        # 如果沒傳入 symbol，從 DF 裡抓
+        if symbol is None and 'stock_id' in df.columns:
+            symbol = df['stock_id'].iloc[0]
 
         # Debug: 印出目前有的欄位，方便除錯
         # logging.info(f"轉換前欄位檢查: {df.columns.tolist()}")
