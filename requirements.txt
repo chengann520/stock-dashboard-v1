@@ -10,5 +10,5 @@ plotly
 FinMind
 xgboost
 scikit-learn
-https://github.com/twopirllc/pandas-ta/archive/development.zip
+pandas_ta
 tqdm
