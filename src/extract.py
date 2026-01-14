@@ -1,62 +1,125 @@
+修改 src/extract.py (抓取籌碼資料)
+我們要修改 extract_data 函式。邏輯是：
+
+如果是台股 (.TW 或 .TWO)，就額外呼叫 FinMind 抓籌碼。
+
+如果是美股 (TSLA, AAPL)，就跳過（美股沒有這種定義的法人資料）。
+
+請用這段程式碼 取代 原本的 src/extract.py：
+
+Python
+
 import yfinance as yf
 import pandas as pd
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from FinMind.data import DataLoader # 引入 FinMind
 
-# 設定日誌 (這是專業專案必備的，不要只用 print)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-def extract_data(stock_id: str, period: str = "1mo") -> pd.DataFrame:
+def extract_data(symbol: str, period: str = "1mo"):
     """
-    從 Yahoo Finance 抓取指定股票的最新日資料。
-    
-    Args:
-        stock_id (str): 股票代號 (e.g., "2330.TW", "TSLA")
-        period (str): 抓取區間 (e.g., '1d', '5d', '1mo', '1y', 'max')
-        
-    Returns:
-        pd.DataFrame: 包含 OHLCV 數據的 DataFrame，若失敗則回傳空的 DataFrame
+    從 Yahoo Finance 抓股價 + 從 FinMind 抓三大法人
     """
-    logging.info(f"🚀 開始抓取 {stock_id}，區間: {period}...")
-    
     try:
-        # 1. 使用 yfinance 抓取
-        ticker = yf.Ticker(stock_id)
-        df = ticker.history(period=period)
+        # 1. 先抓股價 (Yahoo Finance)
+        stock = yf.Ticker(symbol)
+        df_price = stock.history(period=period)
         
-        if df.empty:
-            logging.warning(f"⚠️ 找不到 {stock_id} 的資料，可能是休市或代號錯誤。")
-            return pd.DataFrame()
+        if df_price.empty:
+            logging.warning(f"⚠️ {symbol} 抓不到股價")
+            return None
 
-        # 2. 資料清洗 (Data Cleaning)
-        # reset_index 以便把 Date 變成一個正常的欄位
-        df = df.reset_index()
+        # 整理股價 DataFrame
+        df_price.reset_index(inplace=True)
+        df_price['Date'] = pd.to_datetime(df_price['Date']).dt.date
+        df_price.rename(columns={
+            'Date': 'date', 'Open': 'open', 'High': 'high', 
+            'Low': 'low', 'Close': 'close', 'Volume': 'volume'
+        }, inplace=True)
         
-        # 3. 欄位標準化：將欄位名稱改成全小寫，符合資料庫 SQL 習慣
-        # yfinance 給的是: Date, Open, High, Low, Close, Volume
-        df.columns = [c.lower() for c in df.columns]
+        # 只留需要的欄位
+        df_price = df_price[['date', 'open', 'high', 'low', 'close', 'volume']]
+        df_price['stock_id'] = symbol
+
+        # ==========================================
+        # 2. 抓取三大法人 (FinMind) - 僅限台股
+        # ==========================================
+        if ".TW" in symbol or ".TWO" in symbol:
+            try:
+                # 處理代碼：把 '2330.TW' 變成 '2330' (FinMind 格式)
+                stock_id_finmind = symbol.split('.')[0]
+                
+                # 計算日期範圍 (配合 period)
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                start_date = (datetime.now() - timedelta(days=40)).strftime('%Y-%m-%d') # 多抓一點避免缺漏
+                
+                dl = DataLoader()
+                # 抓取「三大法人買賣」
+                df_chips = dl.taiwan_stock_institutional_investors(
+                    stock_id=stock_id_finmind, 
+                    start_date=start_date, 
+                    end_date=end_date
+                )
+                
+                if not df_chips.empty:
+                    # 整理籌碼資料
+                    # FinMind 回傳欄位: date, stock_id, buy, sell, name (Foreign_Investor, etc.)
+                    
+                    # 樞紐分析 (Pivot): 把直的表變成橫的
+                    df_chips['date'] = pd.to_datetime(df_chips['date']).dt.date
+                    
+                    # 計算「買賣超」 (buy - sell)
+                    df_chips['net'] = df_chips['buy'] - df_chips['sell']
+                    
+                    # Pivot Table: 轉成我們好讀的格式
+                    pivot_df = df_chips.pivot_table(
+                        index='date', 
+                        columns='name', 
+                        values='net', 
+                        aggfunc='sum'
+                    ).reset_index()
+                    
+                    # 對應欄位名稱
+                    # Foreign_Investor -> foreign_net (外資)
+                    # Investment_Trust -> trust_net (投信)
+                    # Dealer_Self / Dealer_Hedging -> dealer_net (自營商合計)
+                    
+                    pivot_df['dealer_net'] = pivot_df.get('Dealer_Self', 0) + pivot_df.get('Dealer_Hedging', 0)
+                    
+                    # 重新命名與選取
+                    rename_map = {
+                        'Foreign_Investor': 'foreign_net',
+                        'Investment_Trust': 'trust_net'
+                    }
+                    pivot_df.rename(columns=rename_map, inplace=True)
+                    
+                    # 確保欄位存在 (如果當天某法人沒動作，補 0)
+                    for col in ['foreign_net', 'trust_net', 'dealer_net']:
+                        if col not in pivot_df.columns:
+                            pivot_df[col] = 0
+                            
+                    # 3. 合併 (Merge) 股價與籌碼
+                    df_final = pd.merge(df_price, pivot_df[['date', 'foreign_net', 'trust_net', 'dealer_net']], on='date', how='left')
+                    
+                    # 補 0 (避免 NaN)
+                    df_final[['foreign_net', 'trust_net', 'dealer_net']] = df_final[['foreign_net', 'trust_net', 'dealer_net']].fillna(0)
+                    
+                    return df_final
+
+            except Exception as e:
+                logging.warning(f"⚠️ {symbol} 籌碼抓取失敗 (但股價已抓到): {e}")
+                # 就算籌碼失敗，還是回傳股價
+                df_price['foreign_net'] = 0
+                df_price['trust_net'] = 0
+                df_price['dealer_net'] = 0
+                return df_price
+
+        # 如果是美股，補 0
+        df_price['foreign_net'] = 0
+        df_price['trust_net'] = 0
+        df_price['dealer_net'] = 0
         
-        # 4. 加上 stock_id 欄位 (資料庫需要知道這是哪支股票)
-        df['stock_id'] = stock_id
-        
-        # 5. 確保日期格式是乾淨的字串 (YYYY-MM-DD)
-        df['date'] = df['date'].dt.date
-        
-        # 選取我們需要的欄位
-        target_columns = ['stock_id', 'date', 'open', 'high', 'low', 'close', 'volume']
-        # 檢查是否所有欄位都存在 (有些股票可能沒有 volume)
-        final_df = df[[c for c in target_columns if c in df.columns]]
-        
-        logging.info(f"✅ 成功抓取 {stock_id}，日期: {final_df.iloc[0]['date']}")
-        return final_df
+        return df_price
 
     except Exception as e:
-        logging.error(f"❌ 抓取 {stock_id} 時發生嚴重錯誤: {e}")
-        return pd.DataFrame()
-
-# --- 簡單的自我測試區塊 (當這個檔案被單獨執行時會跑) ---
-if __name__ == "__main__":
-    # 測試抓台積電
-    data = fetch_stock_data("2330.TW")
-    print("\n--- 測試結果 ---")
-    print(data)
+        logging.error(f"❌ {symbol} 資料抓取失敗: {e}")
+        return None
