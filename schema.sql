@@ -29,5 +29,16 @@ CREATE TABLE IF NOT EXISTS fact_price (
     PRIMARY KEY (stock_id, date)
 );
 
+-- Table: ai_analysis (AI Predictions and Analysis)
+CREATE TABLE IF NOT EXISTS ai_analysis (
+    stock_id VARCHAR(20) REFERENCES dim_stock(stock_id),
+    date DATE,
+    signal VARCHAR(10), -- 'Bull' or 'Bear'
+    probability DECIMAL(5, 4),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_id, date)
+);
+
 -- Index for performance
 CREATE INDEX IF NOT EXISTS idx_fact_price_date ON fact_price(date);
+CREATE INDEX IF NOT EXISTS idx_ai_analysis_date ON ai_analysis(date);
