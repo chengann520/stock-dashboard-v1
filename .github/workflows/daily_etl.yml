@@ -2,8 +2,11 @@ name: Daily Stock ETL
 
 on:
   schedule:
-    - cron: '0 22 * * 1-5' # 22:00 UTC = 06:00 Taipei time (周一到周五)
-  workflow_dispatch:       # 允許手動按按鈕測試
+    # 說明：UTC 時間 0點~5點，每 30 分鐘執行一次
+    # 對應台灣時間：早上 08:00 ~ 下午 13:30
+    - cron: '*/30 0-5 * * 1-5'
+    
+  workflow_dispatch: # 允許手動按按鈕測試
 
 jobs:
   etl:
@@ -18,7 +21,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
       # 3. 安裝套件
       - name: Install dependencies
@@ -34,4 +37,3 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python main.py
-
