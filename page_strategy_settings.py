@@ -83,7 +83,10 @@ def show_strategy_settings_page():
             index=curr_idx
         )
 
-        # === 參數區 (隱藏，由 AI 教練自動管理) ===
+        # === 參數區 (由資料庫讀取，或使用預設值) ===
+        p1_val = config.get('param_1', 0)
+        p2_val = config.get('param_2', 0)
+
         p1 = p1_val if p1_val > 0 else (60 if selected_strategy == 'N1_MOMENTUM' else 5)
         p2 = p2_val if p2_val > 0 else (80 if selected_strategy == 'N1_MOMENTUM' else 20)
         
