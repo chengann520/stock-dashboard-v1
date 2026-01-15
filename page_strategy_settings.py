@@ -61,6 +61,8 @@ def show_strategy_settings_page():
         
         # 定義策略選項與說明
         strategies = {
+            'N1_MOMENTUM': '🏆 N1 策略 (動能 + 國債避險)',
+            'BEST_OF_3': '🚀 Best of 3 (抄底策略)',
             'MA_CROSS': '📈 均線黃金交叉 (趨勢策略)',
             'RSI_REVERSAL': '📉 RSI 低檔反彈 (逆勢策略)',
             'KD_CROSS': '🔁 KD 低檔金叉 (波段策略)',
@@ -91,7 +93,31 @@ def show_strategy_settings_page():
         col_p1, col_p2 = st.columns(2)
         
         # 參數 1 & 2 的意義會隨策略改變
-        if selected_strategy == 'MA_CROSS':
+        if selected_strategy == 'N1_MOMENTUM':
+            st.success("🏆 **N1 策略邏輯**：\n1. 鎖定台股科技巨頭 (如台積電、聯發科...)\n2. 買進「漲勢最強」的前 2 名。\n3. 若大盤不穩或 RSI 過熱，自動轉進「債券 ETF (00679B)」避險。")
+            with col_p1:
+                p1 = st.number_input("動能週期 (天)", value=p1_val if p1_val>0 else 60, help="計算過去幾天的漲幅來排名 (預設 60天/一季)")
+            with col_p2:
+                p2 = st.number_input("RSI 安全門檻", value=p2_val if p2_val>0 else 80, help="RSI 超過此數值代表過熱，不追高")
+            
+            st.divider()
+            st.write("🛡️ **避險模式設定**")
+            current_safe = config.get('safe_asset_id', '00679B.TW')
+            safe_option = st.radio(
+                "當觸發避險時，資金要停泊在哪裡？",
+                ["現金 (CASH) - 空手觀望", "美債 ETF (00679B) - 股債平衡"],
+                index=0 if current_safe == 'CASH' else 1
+            )
+            final_safe_asset = 'CASH' if "現金" in safe_option else '00679B.TW'
+
+        elif selected_strategy == 'BEST_OF_3':
+            st.success("🚀 **Best of 3 (改量版) 邏輯**：\n模擬 Composer 的抄底邏輯。系統會監控一籃子優質股，專門買進「近期跌最深 (Drawdown 最大)」但「長線趨勢仍向上」的股票，賭它均值回歸。")
+            with col_p1:
+                p1 = st.number_input("回撤觀察期 (天)", value=p1_val if p1_val>0 else 20, help="看過去幾天內的跌幅")
+            with col_p2:
+                p2 = st.number_input("長線保護 (MA天數)", value=p2_val if p2_val>0 else 200, help="股價必須在年線之上才敢抄底")
+
+        elif selected_strategy == 'MA_CROSS':
             with col_p1:
                 p1 = st.number_input("短期均線 (MA Short)", value=p1_val if p1_val>0 else 5, min_value=3)
             with col_p2:
@@ -111,7 +137,7 @@ def show_strategy_settings_page():
             with col_p2:
                 p2 = st.number_input("KD 低檔門檻 (通常 20)", value=p2_val if p2_val>0 else 20)
             st.caption("邏輯：當 K值由下往上突破 D值，且 K值 < 門檻時買進。")
-
+ 
         elif selected_strategy == 'MACD_CROSS':
             with col_p1:
                 p1 = st.number_input("快線 EMA (通常 12)", value=p1_val if p1_val>0 else 12)
@@ -161,6 +187,7 @@ def show_strategy_settings_page():
                 'active_strategy': selected_strategy,
                 'param_1': p1,
                 'param_2': p2,
+                'safe_asset_id': final_safe_asset if selected_strategy == 'N1_MOMENTUM' else config.get('safe_asset_id', '00679B.TW'),
                 'risk_preference': risk_pref,
                 'max_position_size': max_pos,
                 'stop_loss_pct': stop_loss,
