@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from supabase import create_client
 from FinMind.data import DataLoader
 from tqdm import tqdm
+import yfinance as yf
 
 # --- 連線設定 ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -28,7 +29,7 @@ def get_current_config():
 
 def update_params(strategy, p1, p2, best_roi):
     """將最佳參數寫入資料庫"""
-    print(f"🏆 冠軍產生！策略 {strategy} 最佳參數: ({p1}, {p2})，近月回測 ROI: {best_roi:.2f}%")
+    print(f"🏆 冠軍產生！策略 {strategy} 最佳參數: ({p1}, {p2})，ROI: {best_roi:.2f}%")
     try:
         supabase.table('strategy_config').update({
             'param_1': int(p1),
@@ -38,38 +39,88 @@ def update_params(strategy, p1, p2, best_roi):
     except Exception as e:
         print(f"❌ 更新參數失敗: {e}")
 
-# --- 快速回測函數 ---
+# --- 強化版資料抓取函數 ---
+def fetch_training_data(stock_id='0050.TW', days=100):
+    """
+    嘗試從 FinMind 抓取，失敗則自動切換到 yfinance
+    """
+    start_date = (date.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    end_date = date.today().strftime('%Y-%m-%d')
+    
+    # 1. 優先嘗試 FinMind
+    if FINMIND_TOKEN:
+        try:
+            print(f"📥 嘗試從 FinMind 下載 {stock_id}...")
+            api = DataLoader()
+            api.login_by_token(api_token=FINMIND_TOKEN)
+            df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=end_date)
+            
+            if not df.empty:
+                print("✅ FinMind 資料下載成功")
+                return df
+            else:
+                print("⚠️ FinMind 回傳空資料，切換備用方案...")
+        except Exception as e:
+            print(f"⚠️ FinMind 連線錯誤: {e}")
+
+    # 2. 備用方案：Yahoo Finance (yfinance)
+    try:
+        print(f"🌍 切換至 Yahoo Finance 下載 {stock_id}...")
+        df = yf.download(stock_id, start=start_date, end=end_date, progress=False)
+        
+        if not df.empty:
+            df = df.reset_index()
+            # 處理 MultiIndex (新版 yfinance 可能會有雙層標題)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+                
+            # 確保欄位名稱對齊 (Open, High, Low, Close)
+            df = df.rename(columns={'Date': 'date', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'})
+            # 確保 Close 欄位存在 (yfinance 有時是大寫)
+            if 'close' not in df.columns and 'Close' in df.columns:
+                df['close'] = df['Close']
+            
+            print("✅ Yahoo Finance 資料下載成功")
+            return df
+    except Exception as e:
+        print(f"❌ Yahoo Finance 也失敗: {e}")
+
+    return pd.DataFrame()
+
 def quick_backtest(df, strategy_name, p1, p2):
-    """
-    在歷史資料上跑一次策略，回傳總報酬率
-    """
+    """快速回測邏輯"""
     df = df.copy()
-    capital = 100000
-    position = 0
-    balance = capital
+    # 確保 Close 是數值
+    df['close'] = pd.to_numeric(df['close'], errors='coerce')
     
     try:
-        # 計算指標
         if strategy_name == 'MA_CROSS':
             df['S'] = ta.sma(df['close'], length=p1)
             df['L'] = ta.sma(df['close'], length=p2)
             df['Signal'] = 0
-            df.loc[(df['S'] > df['L']) & (df['S'].shift(1) <= df['L'].shift(1)), 'Signal'] = 1
-            df.loc[(df['S'] < df['L']) & (df['S'].shift(1) >= df['L'].shift(1)), 'Signal'] = -1
+            cond_buy = (df['S'].shift(1) < df['L'].shift(1)) & (df['S'] > df['L'])
+            cond_sell = (df['S'].shift(1) > df['L'].shift(1)) & (df['S'] < df['L'])
+            df.loc[cond_buy, 'Signal'] = 1
+            df.loc[cond_sell, 'Signal'] = -1
 
         elif strategy_name == 'RSI_REVERSAL':
             df['RSI'] = ta.rsi(df['close'], length=p1)
             threshold = p2
             df['Signal'] = 0
-            df.loc[(df['RSI'] < threshold) & (df['RSI'] > df['RSI'].shift(1)), 'Signal'] = 1
-            df.loc[df['RSI'] > 70, 'Signal'] = -1
+            cond_buy = (df['RSI'].shift(1) < threshold) & (df['RSI'] > df['RSI'].shift(1))
+            cond_sell = df['RSI'] > 70
+            df.loc[cond_buy, 'Signal'] = 1
+            df.loc[cond_sell, 'Signal'] = -1
             
         elif strategy_name == 'KD_CROSS':
             kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
-            k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
+            k_col = f"STOCHk_{p1}_3_3"
+            d_col = f"STOCHd_{p1}_3_3"
             df['Signal'] = 0
-            df.loc[(kdf[k_col] > kdf[d_col]) & (kdf[k_col].shift(1) <= kdf[d_col].shift(1)) & (kdf[k_col] < p2), 'Signal'] = 1
-            df.loc[(kdf[k_col] < kdf[d_col]) & (kdf[k_col].shift(1) >= kdf[d_col].shift(1)) & (kdf[k_col] > 80), 'Signal'] = -1
+            cond_buy = (kdf[k_col].shift(1) < kdf[d_col].shift(1)) & (kdf[k_col] > kdf[d_col]) & (kdf[k_col] < p2)
+            cond_sell = (kdf[k_col].shift(1) > kdf[d_col].shift(1)) & (kdf[k_col] < kdf[d_col])
+            df.loc[cond_buy, 'Signal'] = 1
+            df.loc[cond_sell, 'Signal'] = -1
 
         elif strategy_name == 'MACD_CROSS':
             macdf = ta.macd(df['close'], fast=p1, slow=p2, signal=9)
@@ -78,8 +129,12 @@ def quick_backtest(df, strategy_name, p1, p2):
             df.loc[(macdf[hist_col] > 0) & (macdf[hist_col].shift(1) <= 0), 'Signal'] = 1
             df.loc[(macdf[hist_col] < 0) & (macdf[hist_col].shift(1) >= 0), 'Signal'] = -1
 
-        # 簡單模擬交易
-        for i in range(1, len(df)):
+        # 計算損益
+        capital = 100000
+        balance = capital
+        position = 0
+        
+        for i in range(len(df)):
             price = df.iloc[i]['close']
             sig = df.iloc[i]['Signal']
             
@@ -89,82 +144,69 @@ def quick_backtest(df, strategy_name, p1, p2):
             elif sig == -1 and position > 0: # 賣
                 balance = position * price
                 position = 0
-        
-        # 結算最終價值
+                
         final_val = balance + (position * df.iloc[-1]['close'])
         return (final_val - capital) / capital * 100
-
+        
     except Exception as e:
-        return -999 # 參數無效
+        return -999
 
 def run_learning():
     print("🧠 AI 開始自我學習 (參數最佳化)...")
-    
-    # 1. 讀取目前使用的策略
     config = get_current_config()
     strategy = config.get('active_strategy', 'MA_CROSS')
-    print(f"📚 正在優化策略: {strategy}")
     
-    # 2. 準備訓練數據
-    api = DataLoader()
-    if FINMIND_TOKEN:
-        api.login_by_token(api_token=FINMIND_TOKEN)
-    
-    # 使用 0050.TW 作為基準
-    start_date = (date.today() - timedelta(days=60)).strftime('%Y-%m-%d')
-    try:
-        df = api.taiwan_stock_daily(stock_id='0050.TW', start_date=start_date, end_date=str(date.today()))
-    except Exception as e:
-        print(f"❌ 無法取得訓練數據: {e}")
-        return
+    # 1. 取得訓練數據 (改用強化版函數)
+    df = fetch_training_data('0050.TW', days=120)
     
     if df.empty:
-        print("❌ 無法取得訓練數據")
+        print("❌ 無法取得訓練數據 (FinMind & Yahoo 都失敗)，請檢查網路或代號")
         return
 
-    # 3. 定義搜索空間
-    best_roi = -999
-    best_p1 = config.get('param_1', 5)
-    best_p2 = config.get('param_2', 20)
-    
+    # 2. 定義參數範圍
+    print(f"📚 正在為 {strategy} 尋找最佳參數...")
     combinations = []
     
     if strategy == 'MA_CROSS':
-        for s in range(3, 11, 2):
-            for l in range(10, 61, 10):
+        for s in range(3, 15, 2):
+            for l in range(10, 60, 5):
                 if s < l: combinations.append((s, l))
                 
     elif strategy == 'RSI_REVERSAL':
-        for t in range(6, 15, 2):
-            for th in range(20, 46, 5):
+        for t in range(5, 15, 1):
+            for th in range(20, 50, 5):
                 combinations.append((t, th))
-                
+
     elif strategy == 'KD_CROSS':
-        for k in range(5, 15, 2):
-            for th in range(15, 31, 5):
-                combinations.append((k, th))
+        for t in range(5, 15, 1):
+            for th in range(15, 40, 5):
+                combinations.append((t, th))
 
     elif strategy == 'MACD_CROSS':
         for f in range(8, 17, 2):
             for s in range(20, 41, 5):
                 if f < s: combinations.append((f, s))
-
-    # 4. 開始訓練 (Grid Search)
-    print(f"🧪 準備測試 {len(combinations)} 種參數組合...")
     
-    for p1, p2 in tqdm(combinations):
+    else:
+        print("⚠️ 未知的策略，跳過訓練")
+        return
+
+    # 3. 訓練
+    best_roi = -999
+    best_p1, best_p2 = config.get('param_1', 5), config.get('param_2', 20)
+    
+    for p1, p2 in tqdm(combinations): 
         roi = quick_backtest(df, strategy, p1, p2)
-        
         if roi > best_roi:
             best_roi = roi
             best_p1 = p1
             best_p2 = p2
-    
-    # 5. 更新大腦
-    if best_roi > 0:
+            
+    # 4. 更新
+    if best_roi > -10:
         update_params(strategy, best_p1, best_p2, best_roi)
     else:
-        print("📉 近期市場太差，所有參數都賠錢，維持原設定。")
+        print(f"📉 最佳 ROI ({best_roi:.2f}%) 太低，不更新參數")
 
 if __name__ == "__main__":
     run_learning()
