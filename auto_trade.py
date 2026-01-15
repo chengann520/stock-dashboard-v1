@@ -447,9 +447,16 @@ def run_prediction():
                                             'total_amount': est_cost
                                         })
                                         current_cash -= est_cost
+                                        print(f"✅ 成功掛單: {stock_id} ({shares}股, 單價 {limit_price})")
+                                    else:
+                                        print(f"💸 資金不足略過: {stock_id} (需 {est_cost}, 剩 {current_cash})")
+                                else:
+                                    print(f"🤏 預算不足買一股: {stock_id} (股價 {limit_price}, 預算 {final_trade_size})")
                             else:
                                 total_filtered_conf += 1
-                                # print(f"   📉 {stock_id} 信心不足 ({confidence} < {conf_threshold})")
+                                print(f"📉 信心不足過濾: {stock_id} ({confidence} < {conf_threshold})")
+                        else:
+                            print(f"🎒 已持有略過: {stock_id}")
             except Exception as e: 
                 print(f"⚠️ 掃描批次時出錯: {e}")
                 time.sleep(1)
