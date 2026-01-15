@@ -46,9 +46,6 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
     UNIQUE (stock_id, date)
 );
 
--- Index for performance
-CREATE INDEX IF NOT EXISTS idx_fact_price_date ON fact_price(date);
-CREATE INDEX IF NOT EXISTS idx_ai_analysis_date ON ai_analysis(date);
 -- Table: sim_account (Simulation Account)
 CREATE TABLE IF NOT EXISTS sim_account (
     user_id VARCHAR(50) PRIMARY KEY,
@@ -83,10 +80,6 @@ CREATE TABLE IF NOT EXISTS sim_inventory (
     PRIMARY KEY (user_id, stock_id)
 );
 
--- Initial account setup
-INSERT INTO sim_account (user_id, cash_balance, total_asset)
-VALUES ('default_user', 1000000, 1000000)
-ON CONFLICT (user_id) DO NOTHING;
 -- Table: sim_transactions (Simulation Transaction History)
 CREATE TABLE IF NOT EXISTS sim_transactions (
     id SERIAL PRIMARY KEY,
@@ -112,3 +105,29 @@ CREATE TABLE IF NOT EXISTS sim_daily_assets (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (user_id, date)
 );
+
+-- Table: strategy_config (AI Strategy Configuration)
+CREATE TABLE IF NOT EXISTS strategy_config (
+    user_id VARCHAR(50) PRIMARY KEY DEFAULT 'default_user',
+    max_position_size DECIMAL(16, 4) DEFAULT 100000,
+    stop_loss_pct DECIMAL(16, 4) DEFAULT 0.05,
+    take_profit_pct DECIMAL(16, 4) DEFAULT 0.10,
+    strategy_mode VARCHAR(20) DEFAULT 'CONSERVATIVE',
+    ai_confidence_threshold DECIMAL(16, 4) DEFAULT 0.7,
+    active_strategy VARCHAR(50) DEFAULT 'MA_CROSS',
+    param_1 INTEGER DEFAULT 5,
+    param_2 INTEGER DEFAULT 20,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Initial Data
+INSERT INTO sim_account (user_id, cash_balance, total_asset)
+VALUES ('default_user', 1000000, 1000000)
+ON CONFLICT (user_id) DO NOTHING;
+
+INSERT INTO strategy_config (user_id) VALUES ('default_user')
+ON CONFLICT (user_id) DO NOTHING;
+
+-- Index for performance
+CREATE INDEX IF NOT EXISTS idx_fact_price_date ON fact_price(date);
+CREATE INDEX IF NOT EXISTS idx_ai_analysis_date ON ai_analysis(date);
