@@ -42,12 +42,14 @@ jobs:
         fi
 
     - name: 執行 AI 交易機器人
+      # 👇 這一塊 env 非常重要，少了它 Python 就會讀到 None
       env:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
       run: |
+        # 判斷是手動觸發還是自動排程
         if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
            python auto_trade.py --action ${{ inputs.action }}
         else
