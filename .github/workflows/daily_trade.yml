@@ -2,8 +2,8 @@ name: Daily AI Trading Bot
 
 on:
   schedule:
-    # 台灣早上 08:30 = UTC 00:30 (盤前預測)
-    - cron: '30 0 * * 1-5' 
+    # 台灣早上 05:00 = UTC 21:00 (前一日)
+    - cron: '0 21 * * 0-4' 
     # 台灣下午 15:30 = UTC 07:30 (盤後結算)
     - cron: '30 7 * * 1-5'
     
