@@ -12,3 +12,4 @@ FinMind
 xgboost
 scikit-learn
 tqdm
+supabase
