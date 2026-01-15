@@ -94,6 +94,12 @@ def check_technical_exit(stock_id, strategy_name, p1, p2):
             k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
             if kdf.iloc[-2][k_col] > kdf.iloc[-2][d_col] and kdf.iloc[-1][k_col] < kdf.iloc[-1][d_col] and kdf.iloc[-1][k_col] > 80:
                 return True, f"KD 高檔死亡交叉 (K={kdf.iloc[-1][k_col]:.1f})"
+        
+        elif strategy_name == 'MACD_CROSS':
+            macdf = ta.macd(df['close'], fast=p1, slow=p2, signal=9)
+            hist_col = f"MACDh_{p1}_{p2}_9"
+            if df.iloc[-2][hist_col] > 0 and df.iloc[-1][hist_col] < 0:
+                return True, f"MACD 柱狀圖翻綠 (MACD={df.iloc[-1][hist_col]:.2f})"
                 
     except Exception as e:
         print(f"❌ 計算賣出指標失敗 {stock_id}: {e}")
@@ -150,6 +156,12 @@ def run_prediction():
                         kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
                         k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
                         if df.iloc[-2][k_col] < df.iloc[-2][d_col] and df.iloc[-1][k_col] > df.iloc[-1][d_col] and df.iloc[-1][k_col] < p2: signal = True
+                    elif strategy_name == 'MACD_CROSS':
+                        macdf = ta.macd(df['close'], fast=p1, slow=p2, signal=9)
+                        hist_col = f"MACDh_{p1}_{p2}_9"
+                        if df.iloc[-2][hist_col] < 0 and df.iloc[-1][hist_col] > 0:
+                            signal = True
+                            print(f"🔥 {stock_id} MACD 翻紅！")
                 except: continue
 
                 if signal:
