@@ -21,6 +21,19 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 FEE_RATE = 0.001425
 TAX_RATE = 0.003
 
+# 定義 N1 策略專用的「台股科技巨頭池」
+TECH_GIANTS = [
+    '2330.TW', # 台積電
+    '2454.TW', # 聯發科
+    '2317.TW', # 鴻海
+    '2382.TW', # 廣達
+    '2308.TW', # 台達電
+    '3711.TW', # 日月光
+    '3008.TW', # 大立光
+    '3034.TW'  # 聯詠
+]
+SAFE_ASSET = '00679B.TW' # 元大美債20年 (作為避險資產)
+
 def calculate_cost(price, shares):
     amount = price * shares
     fee = int(amount * FEE_RATE)
@@ -103,12 +116,15 @@ def check_technical_exit(stock_id, strategy_name, p1, p2):
 # --- 3. 核心功能 ---
 
 def run_prediction():
-    print(f"🤖 [盤前] 開始全市場 AI 掃描... {date.today()}")
+    print(f"🤖 [盤前] 開始 AI 策略運算... {date.today()}")
     config = get_strategy_config()
-    all_stocks = get_all_stocks_from_db()
-    
     strategy_name = config.get('active_strategy', 'MA_CROSS')
-    p1, p2 = int(config.get('param_1', 5)), int(config.get('param_2', 20))
+    
+    # 讀取參數
+    p1 = int(config.get('param_1', 60))
+    p2 = int(config.get('param_2', 80))
+    
+    # 讀取風控與資金
     risk_pref = config.get('risk_preference', 'NEUTRAL')
     base_size = float(config.get('max_position_size', 100000))
     size_multiplier = {'AVERSE': 0.8, 'NEUTRAL': 1.0, 'SEEKING': 1.2}.get(risk_pref, 1.0)
@@ -116,7 +132,7 @@ def run_prediction():
     
     print(f"🧠 策略: {strategy_name} ({p1},{p2}) | 風險模式: {risk_pref} | 單筆預算: ${final_trade_size:,.0f}")
 
-    start_date = (date.today() - timedelta(days=120)).strftime('%Y-%m-%d')
+    start_date = (date.today() - timedelta(days=300)).strftime('%Y-%m-%d')
     
     try:
         account = supabase.table('sim_account').select('*').eq('user_id', 'default_user').execute().data[0]
@@ -124,61 +140,157 @@ def run_prediction():
     except: return
     
     orders_data = []
-    BATCH_SIZE = 100 # 從 Supabase 抓資料可以大一點
-    
-    for i in tqdm(range(0, len(all_stocks), BATCH_SIZE), desc="Analyzing Market"):
-        batch_stocks = all_stocks[i : i + BATCH_SIZE]
-        try:
-            res = supabase.table('fact_price').select('*').in_('stock_id', batch_stocks).gte('date', start_date).order('date').execute()
-            df_batch = pd.DataFrame(res.data)
-            if df_batch.empty: continue
 
-            for stock_id, df in df_batch.groupby('stock_id'):
-                if len(df) < p2 + 5: continue
-                df = df.sort_values('date')
-                limit_price = float(df.iloc[-1]['close'])
-                signal = False
-                
-                try:
-                    if strategy_name == 'MA_CROSS':
-                        df['MA_S'], df['MA_L'] = ta.sma(df['close'], length=p1), ta.sma(df['close'], length=p2)
-                        if df.iloc[-2]['MA_S'] < df.iloc[-2]['MA_L'] and df.iloc[-1]['MA_S'] > df.iloc[-1]['MA_L']: signal = True
-                    elif strategy_name == 'RSI_REVERSAL':
-                        df['RSI'] = ta.rsi(df['close'], length=p1)
-                        if df.iloc[-2]['RSI'] < p2 and df.iloc[-1]['RSI'] > df.iloc[-2]['RSI']: signal, limit_price = True, limit_price * 0.99
-                    elif strategy_name == 'KD_CROSS':
-                        kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
-                        k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
-                        if df.iloc[-2][k_col] < df.iloc[-2][d_col] and df.iloc[-1][k_col] > df.iloc[-1][d_col] and df.iloc[-1][k_col] < p2: signal = True
-                    elif strategy_name == 'MACD_CROSS':
-                        macdf = ta.macd(df['close'], fast=p1, slow=p2, signal=9)
-                        hist_col = f"MACDh_{p1}_{p2}_9"
-                        if df.iloc[-2][hist_col] < 0 and df.iloc[-1][hist_col] > 0:
-                            signal = True
-                            print(f"🔥 {stock_id} MACD 翻紅！")
-                except: continue
+    # ==========================================
+    # 🏆 策略 1: N1 Momentum (強者恆強 + 避險)
+    # ==========================================
+    if strategy_name == 'N1_MOMENTUM':
+        print(f"🏆 執行 N1 策略 (池: {len(TECH_GIANTS)}檔科技股 | 動能: {p1}日)")
+        candidates = []
+        
+        res = supabase.table('fact_price').select('*').in_('stock_id', TECH_GIANTS).gte('date', start_date).order('date').execute()
+        df_all = pd.DataFrame(res.data)
+        
+        if df_all.empty:
+            print("❌ 無法取得科技股資料")
+            return
 
-                if signal:
-                    # 記錄 AI 預測訊號
-                    try:
-                        supabase.table('ai_analysis').upsert({
-                            'stock_id': stock_id,
-                            'date': str(date.today()),
-                            'signal': 'Bull',
-                            'entry_price': round(limit_price, 2)
-                        }).execute()
-                    except: pass
+        for stock_id, df in df_all.groupby('stock_id'):
+            if len(df) < p1 + 10: continue
+            df = df.sort_values('date')
+            
+            current_price = float(df.iloc[-1]['close'])
+            momentum = (current_price / float(df.iloc[-1-p1]['close'])) - 1
+            
+            df['RSI'] = ta.rsi(df['close'], length=14)
+            current_rsi = float(df.iloc[-1]['RSI'])
+            
+            df['MA20'] = ta.sma(df['close'], length=20)
+            trend_ok = current_price > float(df.iloc[-1]['MA20'])
+            
+            candidates.append({
+                'stock_id': stock_id, 'momentum': momentum, 'rsi': current_rsi,
+                'price': current_price, 'trend_ok': trend_ok
+            })
+            
+        candidates.sort(key=lambda x: x['momentum'], reverse=True)
+        top_picks = candidates[:2]
+        final_buy_list = []
+        
+        print("📊 N1 候選排名:")
+        for c in top_picks:
+            print(f"   - {c['stock_id']}: 漲幅 {c['momentum']*100:.1f}%, RSI {c['rsi']:.1f}")
+            if c['rsi'] < p2 and c['trend_ok']:
+                final_buy_list.append(c['stock_id'])
+            else:
+                print(f"   ⚠️ {c['stock_id']} 過熱或破線，觸發避險機制！")
+        
+        budget_per_stock = final_trade_size
+        for stock in final_buy_list:
+            price = [x['price'] for x in candidates if x['stock_id'] == stock][0]
+            shares = int(budget_per_stock // price // 1000) * 1000
+            if shares > 0:
+                orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock, 'action': 'BUY', 'order_price': round(price, 2), 'shares': shares, 'status': 'PENDING'})
 
-                    shares = int(final_trade_size // limit_price // 1000) * 1000
+        if len(final_buy_list) < 2:
+            remaining_slots = 2 - len(final_buy_list)
+            safe_asset_id = config.get('safe_asset_id', '00679B.TW')
+            print(f"⚠️ {remaining_slots} 個部位觸發避險條件！(避險標的: {safe_asset_id})")
+            
+            if safe_asset_id == 'CASH':
+                print(f"🛡️ 啟動避險：持有現金 (CASH)，不進行下單。")
+            else:
+                res_safe = supabase.table('fact_price').select('*').eq('stock_id', safe_asset_id).order('date', desc=True).limit(1).execute()
+                if res_safe.data:
+                    safe_price = float(res_safe.data[0]['close'])
+                    safe_budget = budget_per_stock * remaining_slots
+                    shares = int(safe_budget // safe_price // 1000) * 1000
                     if shares > 0:
-                        est_cost, _ = calculate_cost(limit_price, shares)
-                        if current_cash >= est_cost:
-                            orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
-                            current_cash -= est_cost
-        except Exception as e:
-            print(f"⚠️ 批次處理失敗: {e}")
-            time.sleep(1)
+                        orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': safe_asset_id, 'action': 'BUY', 'order_price': round(safe_price, 2), 'shares': shares, 'status': 'PENDING'})
+                        print(f"🛡️ 啟動避險：買入 {safe_asset_id} ({shares}股)")
 
+    # ==========================================
+    # 🚀 策略 2: Best of 3 (Drawdown Reversal)
+    # ==========================================
+    elif strategy_name == 'BEST_OF_3':
+        print(f"🚀 執行 Best of 3 策略 (尋找跌深反彈優質股)...")
+        pool = TECH_GIANTS 
+        res = supabase.table('fact_price').select('*').in_('stock_id', pool).gte('date', start_date).order('date').execute()
+        df_all = pd.DataFrame(res.data)
+        candidates = []
+        
+        for stock_id, df in df_all.groupby('stock_id'):
+            if len(df) < 200: continue
+            df = df.sort_values('date')
+            current_price = float(df.iloc[-1]['close'])
+            recent_high = df['high'].tail(p1).max()
+            drawdown = (current_price - recent_high) / recent_high
+            
+            df['MA200'] = ta.sma(df['close'], length=p2)
+            ma200 = float(df.iloc[-1]['MA200'])
+            
+            if current_price > ma200:
+                candidates.append({'stock_id': stock_id, 'drawdown': drawdown, 'price': current_price})
+        
+        candidates.sort(key=lambda x: x['drawdown'])
+        if candidates:
+            best_dip = candidates[0]
+            print(f"🎯 鎖定抄底標的: {best_dip['stock_id']} (回撤 {best_dip['drawdown']*100:.2f}%)")
+            shares = int(final_trade_size // best_dip['price'] // 1000) * 1000
+            if shares > 0:
+                orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': best_dip['stock_id'], 'action': 'BUY', 'order_price': round(best_dip['price'], 2), 'shares': shares, 'status': 'PENDING'})
+        else:
+            print("💤 沒有股票符合「年線之上 + 跌深」條件")
+
+    # ==========================================
+    # 原本的技術指標策略 (MA, RSI, KD...)
+    # ==========================================
+    else:
+        all_stocks = get_all_stocks_from_db()
+        BATCH_SIZE = 100
+        for i in tqdm(range(0, len(all_stocks), BATCH_SIZE), desc="Analyzing Market"):
+            batch_stocks = all_stocks[i : i + BATCH_SIZE]
+            try:
+                res = supabase.table('fact_price').select('*').in_('stock_id', batch_stocks).gte('date', start_date).order('date').execute()
+                df_batch = pd.DataFrame(res.data)
+                if df_batch.empty: continue
+
+                for stock_id, df in df_batch.groupby('stock_id'):
+                    if len(df) < p2 + 5: continue
+                    df = df.sort_values('date')
+                    limit_price = float(df.iloc[-1]['close'])
+                    signal = False
+                    
+                    try:
+                        if strategy_name == 'MA_CROSS':
+                            df['MA_S'], df['MA_L'] = ta.sma(df['close'], length=p1), ta.sma(df['close'], length=p2)
+                            if df.iloc[-2]['MA_S'] < df.iloc[-2]['MA_L'] and df.iloc[-1]['MA_S'] > df.iloc[-1]['MA_L']: signal = True
+                        elif strategy_name == 'RSI_REVERSAL':
+                            df['RSI'] = ta.rsi(df['close'], length=p1)
+                            if df.iloc[-2]['RSI'] < p2 and df.iloc[-1]['RSI'] > df.iloc[-2]['RSI']: signal, limit_price = True, limit_price * 0.99
+                        elif strategy_name == 'KD_CROSS':
+                            kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
+                            k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
+                            if df.iloc[-2][k_col] < df.iloc[-2][d_col] and df.iloc[-1][k_col] > df.iloc[-1][d_col] and df.iloc[-1][k_col] < p2: signal = True
+                        elif strategy_name == 'MACD_CROSS':
+                            macdf = ta.macd(df['close'], fast=p1, slow=p2, signal=9)
+                            hist_col = f"MACDh_{p1}_{p2}_9"
+                            if df.iloc[-2][hist_col] < 0 and df.iloc[-1][hist_col] > 0: signal = True
+                    except: continue
+
+                    if signal:
+                        try:
+                            supabase.table('ai_analysis').upsert({'stock_id': stock_id, 'date': str(date.today()), 'signal': 'Bull', 'entry_price': round(limit_price, 2)}).execute()
+                        except: pass
+                        shares = int(final_trade_size // limit_price // 1000) * 1000
+                        if shares > 0:
+                            est_cost, _ = calculate_cost(limit_price, shares)
+                            if current_cash >= est_cost:
+                                orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
+                                current_cash -= est_cost
+            except: time.sleep(1)
+
+    # 3. 寫入資料庫 (通用)
     if orders_data:
         real_account = supabase.table('sim_account').select('cash_balance').eq('user_id', 'default_user').execute().data[0]
         real_cash = float(real_account['cash_balance'])
@@ -190,7 +302,7 @@ def run_prediction():
                 real_cash -= cost
         if final_orders:
             supabase.table('sim_orders').insert(final_orders).execute()
-            print(f"🚀 掃描完成！已送出 {len(final_orders)} 筆委託單")
+            print(f"🚀 已送出 {len(final_orders)} 筆委託單")
         else: print("💸 資金不足以執行任何訂單")
     else: print("💤 今日無符合策略之標的")
 
