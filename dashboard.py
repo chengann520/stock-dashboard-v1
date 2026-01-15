@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import random
 from dotenv import load_dotenv
 from page_paper_trade import show_ai_trading_page
+from page_strategy_settings import show_strategy_settings_page
 
 # 0. 載入環境變數 (本地測試用)
 load_dotenv()
@@ -257,8 +258,8 @@ st.sidebar.header("🛠️ 監控控制台")
 # 🟢 A. 建立導覽選單
 menu = st.sidebar.selectbox(
     "功能導覽",
-    ["市場數據分析", "AI 模擬操盤室"],
-    help="切換即時數據分析與 AI 實戰模擬"
+    ["市場數據分析", "AI 模擬操盤室", "⚙️ 策略設定"],
+    help="切換即時數據分析、AI 實戰模擬與策略參數設定"
 )
 
 st.sidebar.markdown("---")
@@ -564,6 +565,8 @@ if symbol:
         st.info("請確認 ETL 程式 (`main.py`) 是否已成功將資料寫入資料表 `fact_price`。")
 elif menu == "AI 模擬操盤室":
     show_ai_trading_page()
+elif menu == "⚙️ 策略設定":
+    show_strategy_settings_page()
 else:
     st.info("👈 請在左側選單選擇一支股票開始分析。")
 
