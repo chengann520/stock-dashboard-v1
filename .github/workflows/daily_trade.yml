@@ -2,7 +2,7 @@ name: Daily AI Trading Bot
 
 on:
   schedule:
-    - cron: '30 0 * * 1-5' 
+    - cron: '0 21 * * 0-4' 
     - cron: '30 7 * * 1-5'
   workflow_dispatch:
     inputs:
@@ -50,7 +50,8 @@ jobs:
       id: check_schedule
       run: |
         current_hour=$(date +%H)
-        if [ "$current_hour" -lt "4" ]; then
+        # UTC 21:00 (TWT 05:00) 判定為預測，UTC 07:30 (TWT 15:30) 判定為結算
+        if [ "$current_hour" -gt "12" ]; then
           echo "action=predict" >> $GITHUB_OUTPUT
         else
           echo "action=settle" >> $GITHUB_OUTPUT
