@@ -3,166 +3,172 @@ from supabase import create_client
 import os
 
 # --- 連線設定 ---
-SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
+SUPABASE_URL = st.secrets["SUPABASE_URL"] if "SUPABASE_URL" in st.secrets else os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"] if "SUPABASE_KEY" in st.secrets else os.environ.get("SUPABASE_KEY")
 
-# 初始化 Supabase
 try:
     if not SUPABASE_URL or not SUPABASE_KEY:
         st.error("❌ 未設定 SUPABASE_URL 或 SUPABASE_KEY")
         st.stop()
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    st.error(f"無法連線到資料庫，請檢查 API Key 設定: {e}")
+    st.error(f"連線失敗，請檢查 Secrets 設定: {e}")
     st.stop()
 
 def load_config():
-    """從資料庫讀取目前的設定"""
+    """從資料庫讀取目前的 AI 大腦設定"""
     try:
         data = supabase.table('strategy_config').select('*').eq('user_id', 'default_user').execute().data
-        if data:
-            return data[0]
-    except Exception as e:
-        st.error(f"讀取設定失敗: {e}")
+        if data: return data[0]
+    except:
+        pass
     return {}
 
 def save_config(new_config):
-    """將新設定寫回資料庫"""
+    """將策略餵給資料庫"""
     try:
-        new_config['user_id'] = 'default_user' # 確保主鍵
+        new_config['user_id'] = 'default_user'
         new_config['updated_at'] = 'now()'
         supabase.table('strategy_config').upsert(new_config).execute()
-        st.success("✅ 策略參數已更新！機器人下次執行時將生效。")
+        st.toast("✅ 策略已成功餵入 AI 大腦！", icon="🧠")
+        st.success("設定已儲存，機器人將於下次執行時採用新策略。")
     except Exception as e:
         st.error(f"儲存失敗: {e}")
 
 def show_strategy_settings_page():
-    st.title("🧠 AI 策略與風險控制中心")
+    st.title("🧠 AI 策略指揮中心")
+    st.markdown("在此頁面定義交易邏輯，**點擊儲存後，GitHub 機器人會自動讀取並執行**。")
+
+    # 讀取現有設定
+    config = load_config()
     
-    current_config = load_config()
+    # --- 頂部狀態列 ---
+    curr_strat = config.get('active_strategy', 'MA_CROSS')
+    curr_risk = config.get('risk_preference', 'NEUTRAL')
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("目前運作策略", curr_strat)
+    c2.metric("目前風險屬性", curr_risk)
+    c3.metric("單筆交易預算", f"${config.get('max_position_size', 100000):,}")
+    
+    st.divider()
 
-    with st.form("strategy_form"):
-        # === 1. 風險性格設定 ===
-        st.subheader("1. 風險性格設定 (Risk Personality)")
-        st.info("這會影響 AI 的下單部位大小與進場積極度。")
+    with st.form("strategy_feeder"):
+        # =========================================
+        # 1. 選擇核心戰術 (Core Strategy)
+        # =========================================
+        st.subheader("1. 選擇核心戰術")
         
-        risk_options = {
-            'AVERSE': '🛡️ 風險趨避 (保守，部位 x0.8，高門檻)',
-            'NEUTRAL': '⚖️ 風險中立 (標準，部位 x1.0)',
-            'SEEKING': '🔥 風險偏好 (激進，部位 x1.2，低門檻)'
-        }
-        
-        curr_risk = current_config.get('risk_preference', 'NEUTRAL')
-        risk_key = st.selectbox(
-            "請選擇您的風險偏好",
-            options=list(risk_options.keys()),
-            format_func=lambda x: risk_options[x],
-            index=list(risk_options.keys()).index(curr_risk) if curr_risk in risk_options else 1
-        )
-
-        st.divider()
-
-        # === 2. 自動出場機制 (Exit Strategy) ===
-        st.subheader("2. 自動出場機制 (Exit Strategy)")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            stop_loss = st.slider(
-                "🛑 停損點 (Stop Loss %)", 
-                0.01, 0.30, 
-                float(current_config.get('stop_loss_pct', 0.05)),
-                format="%.2f",
-                help="虧損超過此比例，AI 將強制止損"
-            )
-            
-        with col2:
-            # 讀取現有設定，如果是 0 代表是用 AI 判斷
-            current_tp = float(current_config.get('take_profit_pct', 0.10))
-            is_dynamic = (current_tp == 0.0)
-            
-            st.write("💰 停利策略")
-            # 使用 Checkbox 切換模式
-            use_ai_exit = st.checkbox("由 AI 自行判斷賣點 (趨勢反轉才賣)", value=is_dynamic)
-            
-            if use_ai_exit:
-                st.info("🤖 AI 將在出現「技術賣訊」時才獲利了結 (例如: 均線死亡交叉)。這能讓獲利最大化，但也可能回吐部分獲利。")
-                take_profit = 0.0 # 存入 0 代表動態停利
-            else:
-                take_profit = st.slider(
-                    "固定停利點 %", 
-                    0.05, 1.00, 
-                    0.10 if is_dynamic else current_tp, # 如果原本是 AI 模式，切回來預設 10%
-                    format="%.2f"
-                )
-
-        st.divider()
-
-        # === 3. 資金與交易邏輯 ===
-        st.subheader("3. 交易邏輯與資金")
-        max_pos = st.number_input("基準單筆金額 (NTD)", value=int(current_config.get('max_position_size', 100000)))
-        
-        # 策略選擇
+        # 定義策略選項與說明
         strategies = {
-            'MA_CROSS': '📈 均線黃金交叉 (順勢策略)',
-            'RSI_REVERSAL': '📉 RSI 超賣反彈 (逆勢抄底)',
-            'KD_CROSS': '🔁 KD 指標黃金交叉 (波段操作)'
+            'MA_CROSS': '📈 均線黃金交叉 (趨勢策略)',
+            'RSI_REVERSAL': '📉 RSI 低檔反彈 (逆勢策略)',
+            'KD_CROSS': '🔁 KD 低檔金叉 (波段策略)',
+            'MACD_CROSS': '📊 MACD 柱狀圖翻紅 (動能策略)'
         }
-        curr_strat = current_config.get('active_strategy', 'MA_CROSS')
+        
+        # 找出目前的選項索引
         strat_keys = list(strategies.keys())
         try:
-            idx = strat_keys.index(curr_strat)
+            curr_idx = strat_keys.index(curr_strat)
         except:
-            idx = 0
+            curr_idx = 0
             
-        selected_strat_key = st.selectbox(
-            "核心策略",
+        selected_strategy = st.selectbox(
+            "請選擇要餵給 AI 的邏輯：",
             options=strat_keys,
             format_func=lambda x: strategies[x],
-            index=idx
+            index=curr_idx
         )
+
+        # === 動態參數區 (根據上面的選擇變換) ===
+        st.info("👇 請設定該策略的詳細參數：")
         
-        # 參數輸入
-        p1_val = int(current_config.get('param_1', 5))
-        p2_val = int(current_config.get('param_2', 20))
+        # 預設值讀取
+        p1_val = int(config.get('param_1', 0))
+        p2_val = int(config.get('param_2', 0))
         
         col_p1, col_p2 = st.columns(2)
         
-        if selected_strat_key == 'MA_CROSS':
-            st.caption("說明：當「短期均線」向上突破「長期均線」時買進。")
+        # 參數 1 & 2 的意義會隨策略改變
+        if selected_strategy == 'MA_CROSS':
             with col_p1:
-                param_1 = st.number_input("短期均線天數 (MA Short)", value=p1_val, min_value=3)
+                p1 = st.number_input("短期均線 (MA Short)", value=p1_val if p1_val>0 else 5, min_value=3)
             with col_p2:
-                param_2 = st.number_input("長期均線天數 (MA Long)", value=p2_val, min_value=10)
-                
-        elif selected_strat_key == 'RSI_REVERSAL':
-            st.caption("說明：當 RSI 低於「超賣區」且開始回升時買進。")
+                p2 = st.number_input("長期均線 (MA Long)", value=p2_val if p2_val>0 else 20, min_value=10)
+            st.caption("邏輯：當 短均線 向上突破 長均線 時買進。")
+            
+        elif selected_strategy == 'RSI_REVERSAL':
             with col_p1:
-                param_1 = st.number_input("RSI 天數", value=p1_val if p1_val > 0 else 14)
+                p1 = st.number_input("RSI 週期 (通常 14)", value=p1_val if p1_val>0 else 14)
             with col_p2:
-                param_2 = st.number_input("超賣門檻 (通常 30)", value=p2_val if p2_val > 0 else 30)
-                
-        elif selected_strat_key == 'KD_CROSS':
-            st.caption("說明：當 K 值由下往上突破 D 值，且數值低於門檻時買進。")
+                p2 = st.number_input("超賣區門檻 (通常 30)", value=p2_val if p2_val>0 else 30)
+            st.caption("邏輯：當 RSI 低於門檻且開始回升時買進。")
+            
+        elif selected_strategy == 'KD_CROSS':
             with col_p1:
-                param_1 = st.number_input("RSV 天數 (通常 9)", value=p1_val if p1_val > 0 else 9)
+                p1 = st.number_input("RSV 週期 (通常 9)", value=p1_val if p1_val>0 else 9)
             with col_p2:
-                param_2 = st.number_input("低檔門檻 (通常 20)", value=p2_val if p2_val > 0 else 20)
+                p2 = st.number_input("KD 低檔門檻 (通常 20)", value=p2_val if p2_val>0 else 20)
+            st.caption("邏輯：當 K值由下往上突破 D值，且 K值 < 門檻時買進。")
+
+        elif selected_strategy == 'MACD_CROSS':
+            with col_p1:
+                p1 = st.number_input("快線 EMA (通常 12)", value=p1_val if p1_val>0 else 12)
+            with col_p2:
+                p2 = st.number_input("慢線 EMA (通常 26)", value=p2_val if p2_val>0 else 26)
+            st.caption("邏輯：當 MACD 柱狀體由綠翻紅 (或快線突破慢線) 時買進。")
+
+        st.divider()
+
+        # =========================================
+        # 2. 風險與資金 (Risk & Money)
+        # =========================================
+        st.subheader("2. 風險控管設定")
+        
+        c_risk1, c_risk2 = st.columns(2)
+        with c_risk1:
+            risk_options = {'AVERSE': '🛡️ 保守 (買少一點)', 'NEUTRAL': '⚖️ 中立 (標準)', 'SEEKING': '🔥 積極 (買多一點)'}
+            curr_r_key = config.get('risk_preference', 'NEUTRAL')
+            risk_pref = st.selectbox("風險性格", list(risk_options.keys()), 
+                                     format_func=lambda x: risk_options[x],
+                                     index=list(risk_options.keys()).index(curr_r_key) if curr_r_key in risk_options else 1)
+            
+            max_pos = st.number_input("單筆交易預算 (NTD)", value=int(config.get('max_position_size', 100000)), step=10000)
+
+        with c_risk2:
+            stop_loss = st.slider("🛑 停損點 (Stop Loss %)", 0.01, 0.30, float(config.get('stop_loss_pct', 0.05)))
+            
+            # 停利設定 (包含 AI 動態停利)
+            curr_tp = float(config.get('take_profit_pct', 0.1))
+            use_ai_exit = st.checkbox("由 AI 決定何時賣出 (動態停利)", value=(curr_tp == 0))
+            
+            if use_ai_exit:
+                take_profit = 0.0
+                st.caption("🤖 AI 將在技術指標轉弱時賣出 (例如均線死叉)")
+            else:
+                take_profit = st.slider("💰 固定停利點 %", 0.05, 1.00, 0.1 if curr_tp==0 else curr_tp)
 
         st.divider()
         
-        submitted = st.form_submit_button("💾 更新 AI 大腦")
+        # =========================================
+        # 3. 提交按鈕
+        # =========================================
+        submit_btn = st.form_submit_button("🚀 儲存並餵給 AI", type="primary")
         
-        if submitted:
-            new_settings = {
-                'risk_preference': risk_key,
-                'stop_loss_pct': stop_loss,
-                'take_profit_pct': take_profit,
+        if submit_btn:
+            new_data = {
+                'active_strategy': selected_strategy,
+                'param_1': p1,
+                'param_2': p2,
+                'risk_preference': risk_pref,
                 'max_position_size': max_pos,
-                'active_strategy': selected_strat_key,
-                'param_1': param_1,
-                'param_2': param_2
+                'stop_loss_pct': stop_loss,
+                'take_profit_pct': take_profit
             }
-            save_config(new_settings)
+            save_config(new_data)
+            # 重新整理頁面以更新頂部狀態
+            st.rerun()
 
 if __name__ == "__main__":
     show_strategy_settings_page()
