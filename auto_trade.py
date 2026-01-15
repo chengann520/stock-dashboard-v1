@@ -433,8 +433,10 @@ def run_prediction():
                                 except: pass
                                 
                                 shares = int(final_trade_size // limit_price)
+                                est_cost, _ = calculate_cost(limit_price, shares)
+                                print(f"🧐 審核中: {stock_id} | 股價: {limit_price} | 預計股數: {shares} | 成本: {est_cost} | 帳戶餘額: {current_cash}")
+                                
                                 if shares > 0:
-                                    est_cost, _ = calculate_cost(limit_price, shares)
                                     if current_cash >= est_cost:
                                         orders_data.append({
                                             'user_id': 'default_user', 
