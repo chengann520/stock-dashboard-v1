@@ -181,6 +181,18 @@ def run_learning():
         for f in range(8, 17, 2):
             for s in range(20, 41, 5):
                 if f < s: combinations.append((f, s))
+
+    elif strategy == 'N1_MOMENTUM':
+        # p1: 動能週期 (20~120), p2: RSI 門檻 (70~90)
+        for p1 in range(20, 121, 20):
+            for p2 in range(70, 91, 5):
+                combinations.append((p1, p2))
+
+    elif strategy == 'BEST_OF_3':
+        # p1: 回撤觀察期 (10~60), p2: MA 天數 (100~250)
+        for p1 in range(10, 61, 10):
+            for p2 in range(100, 251, 50):
+                combinations.append((p1, p2))
     
     else:
         print("⚠️ 未知的策略，跳過訓練")
