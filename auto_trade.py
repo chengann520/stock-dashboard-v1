@@ -1,0 +1,249 @@
+import os
+import argparse
+import pandas as pd
+from datetime import datetime, date
+from supabase import create_client
+from FinMind.data import DataLoader
+import random
+
+# --- 1. 初始化設定 ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+FINMIND_TOKEN = os.environ.get("FINMIND_TOKEN")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("❌ 錯誤: 未設定 SUPABASE_URL 或 SUPABASE_KEY")
+    exit(1)
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# 交易參數
+FEE_RATE = 0.001425
+TAX_RATE = 0.003
+
+def calculate_cost(price, shares):
+    amount = price * shares
+    fee = int(amount * FEE_RATE)
+    fee = max(20, fee)
+    return int(amount + fee), fee
+
+def calculate_revenue(price, shares):
+    amount = price * shares
+    fee = int(amount * FEE_RATE)
+    fee = max(20, fee)
+    tax = int(amount * TAX_RATE)
+    return int(amount - fee - tax), fee, tax
+
+# --- 2. 定義功能函數 ---
+
+def run_prediction():
+    """盤前：AI 預測並掛單"""
+    print(f"🤖 [盤前] 開始 AI 預測... {date.today()}")
+    
+    # 模擬產生預測信號 (實際應串接您的 AI 模型)
+    # 這裡示範從 dim_stock 隨機選兩檔股票
+    try:
+        stocks = supabase.table('dim_stock').select('stock_id').limit(10).execute().data
+        if not stocks:
+            print("⚠️ 資料庫中無股票資料")
+            return
+        
+        selected_stocks = random.sample(stocks, min(2, len(stocks)))
+        ai_predictions = []
+        for s in selected_stocks:
+            # 取得最後一筆收盤價作為參考
+            last_price_data = supabase.table('fact_price').select('close').eq('stock_id', s['stock_id']).order('date', desc=True).limit(1).execute().data
+            ref_price = last_price_data[0]['close'] if last_price_data else 500.0
+            
+            ai_predictions.append({
+                'stock_id': s['stock_id'], 
+                'action': 'BUY', 
+                'price': round(ref_price * random.uniform(0.98, 1.02), 2), 
+                'shares': 1000
+            })
+    except Exception as e:
+        print(f"❌ 預測邏輯錯誤: {e}")
+        return
+    
+    # 檢查資金並下單
+    try:
+        account = supabase.table('sim_account').select('*').eq('user_id', 'default_user').execute().data[0]
+        current_cash = float(account['cash_balance'])
+        
+        orders_data = []
+        for pred in ai_predictions:
+            est_cost, _ = calculate_cost(pred['price'], pred['shares'])
+            if current_cash >= est_cost:
+                orders_data.append({
+                    'date': str(date.today()),
+                    'stock_id': pred['stock_id'],
+                    'action': pred['action'],
+                    'order_price': pred['price'],
+                    'shares': pred['shares'],
+                    'status': 'PENDING'
+                })
+                current_cash -= est_cost 
+            else:
+                print(f"⚠️ 資金不足，無法購買 {pred['stock_id']}")
+
+        if orders_data:
+            supabase.table('sim_orders').insert(orders_data).execute()
+            print(f"✅ 已送出 {len(orders_data)} 筆委託單到資料庫")
+        else:
+            print("⚠️ 無委託單送出")
+    except Exception as e:
+        print(f"❌ 下單邏輯錯誤: {e}")
+
+def run_settlement():
+    """盤後：抓取真實股價並結算"""
+    print(f"⚖️ [盤後] 開始結算... {date.today()}")
+    
+    # 1. 從資料庫抓取今日未成交訂單
+    try:
+        pending_orders = supabase.table('sim_orders').select('*').eq('status', 'PENDING').execute().data
+        if not pending_orders:
+            print("沒有待處理的訂單")
+            return
+    except Exception as e:
+        print(f"❌ 讀取訂單錯誤: {e}")
+        return
+
+    # 2. 抓取今日真實股市行情 (FinMind)
+    api = DataLoader()
+    if FINMIND_TOKEN:
+        api.login_by_token(api_token=FINMIND_TOKEN)
+    
+    stock_ids = list(set([o['stock_id'] for o in pending_orders]))
+    today_str = date.today().strftime('%Y-%m-%d')
+    
+    try:
+        df_market = api.taiwan_stock_daily(
+            stock_id=stock_ids,
+            start_date=today_str,
+            end_date=today_str
+        )
+    except Exception as e:
+        print(f"❌ FinMind 抓取錯誤: {e}")
+        return
+    
+    if df_market.empty:
+        print("❌ 抓不到今日股價資料 (可能是假日或尚未收盤)")
+        return
+
+    # 3. 執行比對與結算
+    try:
+        account = supabase.table('sim_account').select('*').eq('user_id', 'default_user').execute().data[0]
+        cash = float(account['cash_balance'])
+        
+        for order in pending_orders:
+            stock_data = df_market[df_market['stock_id'] == order['stock_id']]
+            if stock_data.empty: continue
+            
+            row = stock_data.iloc[0]
+            executed = False
+            fee = 0
+            tax = 0
+            total_amount = 0
+            
+            if order['action'] == 'BUY':
+                if row['low'] <= order['order_price']:
+                    total_amount, fee = calculate_cost(order['order_price'], order['shares'])
+                    # 再次確認資金 (雖然預測時扣過了，但為了保險)
+                    # 注意：這裡的邏輯是預測時已經扣掉預估資金，所以這裡直接成交
+                    executed = True
+                    # 更新庫存
+                    update_inventory(order['stock_id'], order['shares'], order['order_price'])
+                    print(f"🎯 成交買入: {order['stock_id']} @ {order['order_price']}")
+            
+            elif order['action'] == 'SELL':
+                if row['high'] >= order['order_price']:
+                    total_amount, fee, tax = calculate_revenue(order['order_price'], order['shares'])
+                    executed = True
+                    cash += total_amount
+                    # 更新庫存 (刪除或減少)
+                    update_inventory(order['stock_id'], -order['shares'], order['order_price'])
+                    print(f"🎯 成交賣出: {order['stock_id']} @ {order['order_price']}")
+
+            if executed:
+                supabase.table('sim_orders').update({
+                    'status': 'FILLED',
+                    'fee': fee,
+                    'tax': tax,
+                    'total_amount': total_amount
+                }).eq('id', order['id']).execute()
+            else:
+                # 未成交，取消訂單並退回資金 (如果是買單)
+                if order['action'] == 'BUY':
+                    est_cost, _ = calculate_cost(order['order_price'], order['shares'])
+                    cash += est_cost
+                
+                supabase.table('sim_orders').update({'status': 'CANCELLED'}).eq('id', order['id']).execute()
+                print(f"⏩ 未成交取消: {order['stock_id']}")
+
+        # 更新最終現金
+        supabase.table('sim_account').update({'cash_balance': cash}).eq('user_id', 'default_user').execute()
+        
+        # 計算總資產 (現金 + 持股價值)
+        calculate_total_assets(cash)
+        
+        print("✅ 結算完成")
+    except Exception as e:
+        print(f"❌ 結算邏輯錯誤: {e}")
+
+def update_inventory(stock_id, shares, price):
+    """更新庫存邏輯"""
+    try:
+        inv = supabase.table('sim_inventory').select('*').eq('user_id', 'default_user').eq('stock_id', stock_id).execute().data
+        if inv:
+            new_shares = inv[0]['shares'] + shares
+            if new_shares > 0:
+                # 更新平均成本 (僅買入時更新)
+                if shares > 0:
+                    total_cost = (inv[0]['shares'] * inv[0]['avg_cost']) + (shares * price)
+                    avg_cost = total_cost / new_shares
+                else:
+                    avg_cost = inv[0]['avg_cost']
+                
+                supabase.table('sim_inventory').update({
+                    'shares': new_shares,
+                    'avg_cost': avg_cost,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('user_id', 'default_user').eq('stock_id', stock_id).execute()
+            else:
+                supabase.table('sim_inventory').delete().eq('user_id', 'default_user').eq('stock_id', stock_id).execute()
+        elif shares > 0:
+            supabase.table('sim_inventory').insert({
+                'user_id': 'default_user',
+                'stock_id': stock_id,
+                'shares': shares,
+                'avg_cost': price
+            }).execute()
+    except Exception as e:
+        print(f"❌ 庫存更新錯誤: {e}")
+
+def calculate_total_assets(cash):
+    """計算總資產"""
+    try:
+        inventory = supabase.table('sim_inventory').select('*').eq('user_id', 'default_user').execute().data
+        stock_value = 0
+        for item in inventory:
+            # 取得最新收盤價
+            last_price = supabase.table('fact_price').select('close').eq('stock_id', item['stock_id']).order('date', desc=True).limit(1).execute().data
+            price = last_price[0]['close'] if last_price else item['avg_cost']
+            stock_value += (price * item['shares'])
+        
+        total_asset = cash + stock_value
+        supabase.table('sim_account').update({'total_asset': total_asset}).eq('user_id', 'default_user').execute()
+    except Exception as e:
+        print(f"❌ 總資產計算錯誤: {e}")
+
+# --- 3. 主程式入口 ---
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--action", choices=["predict", "settle"], required=True)
+    args = parser.parse_args()
+
+    if args.action == "predict":
+        run_prediction()
+    elif args.action == "settle":
+        run_settlement()
