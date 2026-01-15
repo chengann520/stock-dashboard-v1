@@ -7,6 +7,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import random
 from dotenv import load_dotenv
+from page_paper_trade import show_ai_trading_page
 
 # 0. 載入環境變數 (本地測試用)
 load_dotenv()
@@ -253,33 +254,45 @@ def get_stock_options():
 # 4. 側邊欄邏輯
 st.sidebar.header("🛠️ 監控控制台")
 
-# 🟢 B. 取得清單並決定下拉選單位置
-stock_ids, display_names = get_stock_options()
+# 🟢 A. 建立導覽選單
+menu = st.sidebar.selectbox(
+    "功能導覽",
+    ["市場數據分析", "AI 模擬操盤室"],
+    help="切換即時數據分析與 AI 實戰模擬"
+)
 
-if stock_ids:
-    try:
-        current_index = stock_ids.index(st.session_state['selected_stock_id'])
-    except ValueError:
-        current_index = 0
+st.sidebar.markdown("---")
 
-    selected_display = st.sidebar.selectbox(
-        '請輸入代碼或選擇股票：',
-        display_names,
-        index=current_index,
-        help="支援搜尋功能，直接輸入代碼即可快速篩選"
-    )
-    
-    # 從顯示名稱取出代碼
-    selected_symbol_from_box = selected_display.split(" | ")[0]
+if menu == "市場數據分析":
+    # 🟢 B. 取得清單並決定下拉選單位置
+    stock_ids, display_names = get_stock_options()
 
-    # 🟢 C. 如果選單變動，更新 Session State 並重整
-    if selected_symbol_from_box != st.session_state['selected_stock_id']:
-        st.session_state['selected_stock_id'] = selected_symbol_from_box
-        st.rerun()
+    if stock_ids:
+        try:
+            current_index = stock_ids.index(st.session_state['selected_stock_id'])
+        except ValueError:
+            current_index = 0
+
+        selected_display = st.sidebar.selectbox(
+            '請輸入代碼或選擇股票：',
+            display_names,
+            index=current_index,
+            help="支援搜尋功能，直接輸入代碼即可快速篩選"
+        )
         
-    symbol = st.session_state['selected_stock_id']
+        # 從顯示名稱取出代碼
+        selected_symbol_from_box = selected_display.split(" | ")[0]
+
+        # 🟢 C. 如果選單變動，更新 Session State 並重整
+        if selected_symbol_from_box != st.session_state['selected_stock_id']:
+            st.session_state['selected_stock_id'] = selected_symbol_from_box
+            st.rerun()
+            
+        symbol = st.session_state['selected_stock_id']
+    else:
+        st.sidebar.warning("⚠️ 資料庫中無股票清單")
+        symbol = None
 else:
-    st.sidebar.warning("⚠️ 資料庫中無股票清單")
     symbol = None
 
 st.sidebar.markdown("---")
@@ -549,6 +562,8 @@ if symbol:
     else:
         st.warning(f"🤔 找不到 {symbol} 的股價數據。")
         st.info("請確認 ETL 程式 (`main.py`) 是否已成功將資料寫入資料表 `fact_price`。")
+elif menu == "AI 模擬操盤室":
+    show_ai_trading_page()
 else:
     st.info("👈 請在左側選單選擇一支股票開始分析。")
 
