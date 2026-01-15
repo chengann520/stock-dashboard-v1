@@ -33,8 +33,8 @@ jobs:
 
     - name: 安裝套件
       run: |
-        # 👇 補上 tqdm 即可
-        pip install supabase finmind pandas plotly tqdm
+        # 👇 補上 tqdm 與 pandas_ta 即可
+        pip install supabase finmind pandas plotly tqdm pandas_ta
 
     # 👇 修改重點 2：我加了一個「偵探步驟」，幫您檢查變數到底有沒有進來
     - name: Debug - 檢查金鑰狀態
