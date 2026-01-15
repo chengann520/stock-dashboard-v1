@@ -2,17 +2,21 @@ name: Daily AI Trading Bot
 
 on:
   schedule:
-    # 台灣早上 05:00 = UTC 21:00 (前一日)
-    - cron: '0 21 * * 0-4' 
-    # 台灣下午 15:30 = UTC 07:30 (盤後結算)
+    - cron: '30 0 * * 1-5' 
     - cron: '30 7 * * 1-5'
-    
   workflow_dispatch:
     inputs:
       action:
         description: '執行動作 (predict 或 settle)'
         required: true
         default: 'predict'
+
+# 👇 修改重點 1：把 env 移到最外面，這樣整個檔案裡的所有步驟都能用
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+  FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
 jobs:
   trade:
@@ -25,13 +29,23 @@ jobs:
     - name: 設定 Python 環境
       uses: actions/setup-python@v4
       with:
-        python-version: "3.12" # 與專案其他 workflow 保持一致
+        python-version: "3.10"
 
     - name: 安裝套件
       run: |
-        pip install -r requirements.txt
+        pip install supabase finmind pandas plotly
 
-    - name: 判斷執行模式 (自動排程)
+    # 👇 修改重點 2：我加了一個「偵探步驟」，幫您檢查變數到底有沒有進來
+    - name: Debug - 檢查金鑰狀態
+      run: |
+        echo "正在檢查金鑰..."
+        if [ -z "$SUPABASE_URL" ]; then
+          echo "❌ 慘了... Linux 系統說 SUPABASE_URL 是空的"
+        else
+          echo "✅ 成功！Linux 系統讀到了 SUPABASE_URL (長度: ${#SUPABASE_URL})"
+        fi
+
+    - name: 判斷執行模式
       id: check_schedule
       run: |
         current_hour=$(date +%H)
@@ -40,13 +54,10 @@ jobs:
         else
           echo "action=settle" >> $GITHUB_OUTPUT
         fi
-
+      
     - name: 執行 AI 交易機器人
-      # 👇 這一塊 env 非常重要，少了它 Python 就會讀到 None
-      env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # 👇 因為上面已經設定了全域 env，這裡不需要再寫一次 env
       run: |
-        # 判斷是手動觸發還是自動排程
         if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
            python auto_trade.py --action ${{ inputs.action }}
         else
