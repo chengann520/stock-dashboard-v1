@@ -83,5 +83,55 @@ def update_market_close():
         except Exception as e:
             logging.error(f"❌ {stock_id} 驗證失敗: {e}")
 
+    # 3. 計算並記錄每日準確率 (Win Rate)
+    record_daily_stats(engine)
+
+def record_daily_stats(engine):
+    """計算並記錄每日預測準確率"""
+    logging.info("📊 正在計算每日準確率統計...")
+    try:
+        with engine.connect() as conn:
+            # 找出所有已經驗證過的日期
+            query = text("""
+                SELECT date, 
+                       COUNT(*) as total, 
+                       SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct,
+                       AVG(return_pct) as avg_ret
+                FROM ai_analysis 
+                WHERE is_correct IS NOT NULL
+                GROUP BY date
+                ORDER BY date DESC
+            """)
+            stats = pd.read_sql(query, conn)
+            
+            if stats.empty:
+                logging.info("ℹ️ 沒有足夠的驗證資料來計算統計")
+                return
+
+            for _, row in stats.iterrows():
+                win_rate = float(row['correct']) / float(row['total']) if row['total'] > 0 else 0
+                
+                # 寫入 sim_daily_stats
+                with engine.begin() as conn_write:
+                    upsert_sql = text("""
+                        INSERT INTO sim_daily_stats (date, total_predictions, correct_predictions, win_rate, avg_return)
+                        VALUES (:date, :total, :correct, :win_rate, :avg_ret)
+                        ON CONFLICT (date) DO UPDATE SET
+                            total_predictions = EXCLUDED.total_predictions,
+                            correct_predictions = EXCLUDED.correct_predictions,
+                            win_rate = EXCLUDED.win_rate,
+                            avg_return = EXCLUDED.avg_return
+                    """)
+                    conn_write.execute(upsert_sql, {
+                        "date": row['date'],
+                        "total": int(row['total']),
+                        "correct": int(row['correct']),
+                        "win_rate": win_rate,
+                        "avg_ret": float(row['avg_ret'])
+                    })
+            logging.info(f"✅ 成功更新 {len(stats)} 天的準確率統計")
+    except Exception as e:
+        logging.error(f"❌ 記錄每日統計失敗: {e}")
+
 if __name__ == "__main__":
     update_market_close()
