@@ -1,7 +1,8 @@
 import os
 import argparse
 import pandas as pd
-from datetime import datetime, date
+import pandas_ta as ta
+from datetime import datetime, date, timedelta
 from supabase import create_client
 from FinMind.data import DataLoader
 import random
@@ -50,76 +51,155 @@ def get_strategy_config():
     return {
         'max_position_size': 100000,
         'stop_loss_pct': 0.05,
-        'ai_confidence_threshold': 0.7
+        'ai_confidence_threshold': 0.7,
+        'active_strategy': 'MA_CROSS',
+        'param_1': 5,
+        'param_2': 20
     }
 
 def run_prediction():
-    print(f"🤖 [盤前] 開始 AI 預測... {date.today()}")
+    print(f"🤖 [盤前] 開始 AI 策略運算... {date.today()}")
     
-    # 1. 讀取最新策略設定
+    # 1. 讀取策略設定
     config = get_strategy_config()
-    print(f"⚙️ 目前策略: 模式={config.get('strategy_mode')}, 最大倉位=${config.get('max_position_size')}, 信心門檻={config.get('ai_confidence_threshold')}")
-
-    # === AI 邏輯區 (模擬) ===
-    # 假設這是 AI 算出來的原始信號
-    raw_predictions = [
-        {'stock_id': '2330.TW', 'action': 'BUY', 'price': 580.0, 'confidence': 0.85},
-        {'stock_id': '2881.TW', 'action': 'BUY', 'price': 62.5, 'confidence': 0.60}, # 信心較低
-        {'stock_id': '2603.TW', 'action': 'BUY', 'price': 150.0, 'confidence': 0.95}
-    ]
+    strategy_name = config.get('active_strategy', 'MA_CROSS')
+    p1 = int(config.get('param_1', 5))
+    p2 = int(config.get('param_2', 20))
+    max_trade_amt = float(config.get('max_position_size', 100000))
     
+    print(f"🧠 目前邏輯: {strategy_name} (參數: {p1}, {p2})")
+    
+    # 2. 準備要觀察的股票清單
+    target_stocks = ['2330.TW', '2317.TW', '2454.TW', '2881.TW', '2603.TW']
+    
+    # 3. 登入 FinMind (抓取歷史資料來算指標)
+    api = DataLoader()
+    if FINMIND_TOKEN:
+        api.login_by_token(api_token=FINMIND_TOKEN)
+    
+    # 抓取過去 100 天的資料 (計算 MA 或 RSI 需要歷史數據)
+    start_date = (date.today() - timedelta(days=100)).strftime('%Y-%m-%d')
+    try:
+        df_history = api.taiwan_stock_daily(
+            stock_id=target_stocks,
+            start_date=start_date,
+            end_date=date.today().strftime('%Y-%m-%d')
+        )
+    except Exception as e:
+        print(f"❌ FinMind 抓取錯誤: {e}")
+        return
+
+    if df_history.empty:
+        print("❌ 抓不到歷史股價資料")
+        return
+
+    orders_data = []
     try:
         account = supabase.table('sim_account').select('*').eq('user_id', 'default_user').execute().data[0]
         current_cash = float(account['cash_balance'])
+    except Exception as e:
+        print(f"❌ 讀取帳戶錯誤: {e}")
+        return
+    
+    # 4. 逐一分析股票
+    for stock_id in target_stocks:
+        df = df_history[df_history['stock_id'] == stock_id].copy()
+        if len(df) < max(p1, p2, 30): # 資料不足就跳過
+            continue
+            
+        # 確保按日期排序
+        df = df.sort_values('date')
         
-        orders_data = []
+        # === 策略大腦核心 ===
+        signal = False
+        limit_price = float(df.iloc[-1]['close']) # 預設用昨收價掛單
         
-        # 2. 應用策略過濾器
-        threshold = float(config.get('ai_confidence_threshold', 0.7))
-        max_trade_amt = float(config.get('max_position_size', 100000))
-
-        for pred in raw_predictions:
-            # 規則 A: 信心不足就不做
-            if pred['confidence'] < threshold:
-                print(f"❌ {pred['stock_id']} 信心 {pred['confidence']} 低於門檻 {threshold}，跳過")
-                continue
+        try:
+            if strategy_name == 'MA_CROSS':
+                # 計算均線
+                df['MA_Short'] = ta.sma(df['close'], length=p1)
+                df['MA_Long'] = ta.sma(df['close'], length=p2)
                 
+                # 判斷黃金交叉 (昨天短線 < 長線，今天短線 > 長線)
+                prev_short = df.iloc[-2]['MA_Short']
+                prev_long = df.iloc[-2]['MA_Long']
+                curr_short = df.iloc[-1]['MA_Short']
+                curr_long = df.iloc[-1]['MA_Long']
+                
+                if prev_short < prev_long and curr_short > curr_long:
+                    signal = True
+                    print(f"🔥 {stock_id} 出現均線黃金交叉！")
+
+            elif strategy_name == 'RSI_REVERSAL':
+                # 計算 RSI
+                df['RSI'] = ta.rsi(df['close'], length=p1) # p1 是 RSI 天數
+                curr_rsi = df.iloc[-1]['RSI']
+                prev_rsi = df.iloc[-2]['RSI']
+                threshold = p2 # p2 是超賣線 (例如 30)
+                
+                # 判斷: 昨天 RSI < 30 且 今天 RSI 回升
+                if prev_rsi < threshold and curr_rsi > prev_rsi:
+                    signal = True
+                    limit_price = float(df.iloc[-1]['close']) * 0.99 # 逆勢單掛低一點
+                    print(f"🔥 {stock_id} RSI 低檔反彈 (RSI={curr_rsi:.1f})")
+
+            elif strategy_name == 'KD_CROSS':
+                # 計算 KD
+                kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
+                # pandas_ta 產生的欄位名稱通常是 STOCHk_9_3_3, STOCHd_9_3_3
+                k_col = f"STOCHk_{p1}_3_3"
+                d_col = f"STOCHd_{p1}_3_3"
+                
+                curr_k = kdf.iloc[-1][k_col]
+                curr_d = kdf.iloc[-1][d_col]
+                prev_k = kdf.iloc[-2][k_col]
+                prev_d = kdf.iloc[-2][d_col]
+                threshold = p2 # 低檔區 (例如 20)
+                
+                # 黃金交叉且在低檔
+                if prev_k < prev_d and curr_k > curr_d and curr_k < threshold:
+                    signal = True
+                    print(f"🔥 {stock_id} KD 低檔金叉 (K={curr_k:.1f})")
+
+        except Exception as e:
+            print(f"❌ 計算指標錯誤 {stock_id}: {e}")
+            continue
+
+        # 5. 若出現訊號，執行下單邏輯 (檢查資金)
+        if signal:
             # 規則 B: 計算股數 (不超過最大單筆金額)
-            shares_can_buy = int(max_trade_amt // pred['price'])
+            shares_can_buy = int(max_trade_amt // limit_price)
             
             # 轉成整張 (台股通常 1000 股一張)
             shares_can_buy = (shares_can_buy // 1000) * 1000 
             
             if shares_can_buy <= 0:
-                print(f"⚠️ {pred['stock_id']} 資金配額不足以買一張，跳過")
+                print(f"⚠️ {stock_id} 資金配額不足以買一張，跳過")
                 continue
 
-            est_cost, _ = calculate_cost(pred['price'], shares_can_buy)
-            
-            # 規則 C: 總資金檢查
-            if current_cash >= est_cost:
+            cost, _ = calculate_cost(limit_price, shares_can_buy)
+            if current_cash >= cost:
                 orders_data.append({
                     'user_id': 'default_user',
                     'date': str(date.today()),
-                    'stock_id': pred['stock_id'],
-                    'action': pred['action'],
-                    'order_price': pred['price'],
+                    'stock_id': stock_id,
+                    'action': 'BUY',
+                    'order_price': round(limit_price, 2),
                     'shares': shares_can_buy,
                     'status': 'PENDING'
                 })
-                current_cash -= est_cost # 暫扣
-                print(f"✅ {pred['stock_id']} 符合策略，準備掛單 {shares_can_buy} 股")
-            else:
-                print(f"⚠️ {pred['stock_id']} 帳戶餘額不足")
+                current_cash -= cost
+                print(f"✅ {stock_id} 符合策略，準備掛單 {shares_can_buy} 股")
 
-        # 3. 寫入資料庫
-        if orders_data:
+    # 6. 寫入 DB
+    if orders_data:
+        try:
             supabase.table('sim_orders').insert(orders_data).execute()
-            print(f"🚀 已送出 {len(orders_data)} 筆訂單")
-        else:
-            print("💤 本日無符合策略的標的")
-    except Exception as e:
-        print(f"❌ 預測邏輯錯誤: {e}")
+            print(f"🚀 策略運算完成，產生 {len(orders_data)} 筆買單")
+        except Exception as e:
+            print(f"❌ 寫入訂單錯誤: {e}")
+    else:
+        print("💤 今日無符合策略訊號")
 
 def run_settlement():
     """盤後：抓取真實股價並結算"""
