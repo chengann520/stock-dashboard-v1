@@ -37,8 +37,8 @@ def save_config(new_config):
         st.error(f"儲存失敗: {e}")
 
 def show_strategy_settings_page():
-    st.title("⚙️ AI 策略指揮中心")
-    st.markdown("在這裡調整交易參數，您的 GitHub 機器人會自動讀取最新的指令。")
+    st.title("🧠 AI 策略邏輯灌輸中心")
+    st.info("在此教導 AI 該使用哪種技術指標來判斷進場點。")
 
     # 讀取現有設定
     current_config = load_config()
@@ -72,52 +72,69 @@ def show_strategy_settings_page():
 
         st.divider()
 
-        st.subheader("2. AI 策略邏輯 (Strategy Logic)")
+        # === 重點：策略邏輯選擇區 ===
+        st.subheader("2. 核心交易邏輯 (Core Logic)")
         
-        # 策略模式
-        mode_options = ['CONSERVATIVE', 'AGGRESSIVE', 'BALANCED']
-        current_mode = current_config.get('strategy_mode', 'CONSERVATIVE')
+        # 定義有哪些策略可選
+        strategies = {
+            'MA_CROSS': '📈 均線黃金交叉 (順勢策略)',
+            'RSI_REVERSAL': '📉 RSI 超賣反彈 (逆勢抄底)',
+            'KD_CROSS': '🔁 KD 指標黃金交叉 (波段操作)'
+        }
+        
+        # 找出目前設定的策略索引
+        curr_strat = current_config.get('active_strategy', 'MA_CROSS')
+        strat_keys = list(strategies.keys())
         try:
-            idx = mode_options.index(current_mode)
+            idx = strat_keys.index(curr_strat)
         except:
             idx = 0
             
-        strategy_mode = st.selectbox(
-            "交易風格模式", 
-            mode_options,
-            index=idx,
-            help="保守: 只買權值股 / 積極: 包含中小型股"
+        selected_strat_key = st.selectbox(
+            "請選擇要灌輸給 AI 的交易邏輯",
+            options=strat_keys,
+            format_func=lambda x: strategies[x],
+            index=idx
         )
         
-        col3, col4 = st.columns(2)
-        with col3:
-            # 停利百分比
-            take_profit = st.slider(
-                "停利點 (Take Profit %)", 
-                min_value=0.05, max_value=0.50, step=0.01,
-                value=float(current_config.get('take_profit_pct', 0.10)),
-                format="%.2f"
-            )
-        with col4:
-            # AI 信心門檻
-            ai_threshold = st.slider(
-                "AI 信心門檻 (Confidence Threshold)", 
-                min_value=0.5, max_value=0.99, step=0.01,
-                value=float(current_config.get('ai_confidence_threshold', 0.7)),
-                help="AI 預測機率高於此數值才下單"
-            )
+        # 根據選擇的策略，動態顯示參數輸入框
+        p1_val = int(current_config.get('param_1', 5))
+        p2_val = int(current_config.get('param_2', 20))
+        
+        col_p1, col_p2 = st.columns(2)
+        
+        if selected_strat_key == 'MA_CROSS':
+            st.caption("說明：當「短期均線」向上突破「長期均線」時買進。")
+            with col_p1:
+                param_1 = st.number_input("短期均線天數 (MA Short)", value=p1_val, min_value=3)
+            with col_p2:
+                param_2 = st.number_input("長期均線天數 (MA Long)", value=p2_val, min_value=10)
+                
+        elif selected_strat_key == 'RSI_REVERSAL':
+            st.caption("說明：當 RSI 低於「超賣區」且開始回升時買進。")
+            with col_p1:
+                param_1 = st.number_input("RSI 天數", value=p1_val if p1_val > 0 else 14)
+            with col_p2:
+                param_2 = st.number_input("超賣門檻 (通常 30)", value=p2_val if p2_val > 0 else 30)
+                
+        elif selected_strat_key == 'KD_CROSS':
+            st.caption("說明：當 K 值由下往上突破 D 值，且數值低於門檻時買進。")
+            with col_p1:
+                param_1 = st.number_input("RSV 天數 (通常 9)", value=p1_val if p1_val > 0 else 9)
+            with col_p2:
+                param_2 = st.number_input("低檔門檻 (通常 20)", value=p2_val if p2_val > 0 else 20)
 
         st.divider()
         
-        submitted = st.form_submit_button("💾 儲存設定")
+        submitted = st.form_submit_button("🧠 灌輸邏輯並儲存")
         
         if submitted:
             new_settings = {
                 'max_position_size': max_pos,
                 'stop_loss_pct': stop_loss,
-                'take_profit_pct': take_profit,
-                'strategy_mode': strategy_mode,
-                'ai_confidence_threshold': ai_threshold
+                'active_strategy': selected_strat_key,
+                'param_1': param_1,
+                'param_2': param_2
             }
             save_config(new_settings)
 
