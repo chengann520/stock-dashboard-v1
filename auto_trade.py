@@ -1,19 +1,20 @@
 import os
 import argparse
+import time
 import pandas as pd
 import pandas_ta as ta
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta, date
 from supabase import create_client
 from FinMind.data import DataLoader
-import random
+from tqdm import tqdm
 
-# --- 1. 初始化設定 ---
+# --- 1. 連線設定 ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 FINMIND_TOKEN = os.environ.get("FINMIND_TOKEN")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    print("❌ 錯誤: 未設定 SUPABASE_URL 或 SUPABASE_KEY")
+    print("❌ 錯誤: 環境變數未設定 (SUPABASE_URL/KEY)")
     exit(1)
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -35,145 +36,145 @@ def calculate_revenue(price, shares):
     tax = int(amount * TAX_RATE)
     return int(amount - fee - tax), fee, tax
 
-# --- 2. 定義功能函數 ---
+# --- 2. 輔助函數 ---
 
 def get_strategy_config():
-    """從資料庫讀取使用者設定"""
+    """從資料庫讀取策略與風控設定"""
     try:
         data = supabase.table('strategy_config').select('*').eq('user_id', 'default_user').execute().data
-        if data:
-            return data[0]
+        if data: return data[0]
     except Exception as e:
-        print(f"⚠️ 讀取策略設定失敗，使用預設值: {e}")
-    
+        print(f"⚠️ 讀取設定失敗: {e}")
+    # 預設值
     return {
-        'max_position_size': 100000,
-        'stop_loss_pct': 0.05,
-        'take_profit_pct': 0.10,
-        'ai_confidence_threshold': 0.7,
-        'active_strategy': 'MA_CROSS',
-        'risk_preference': 'NEUTRAL',
-        'param_1': 5,
-        'param_2': 20
+        'max_position_size': 100000, 'risk_preference': 'NEUTRAL',
+        'stop_loss_pct': 0.05, 'take_profit_pct': 0.1,
+        'active_strategy': 'MA_CROSS', 'param_1': 5, 'param_2': 20,
+        'ai_confidence_threshold': 0.7
     }
 
+def get_all_stocks_from_db():
+    """從 dim_stock 表格讀取所有股票代碼"""
+    print("📥 正在從資料庫讀取股票清單...")
+    try:
+        res = supabase.table('dim_stock').select('stock_id').limit(3000).execute()
+        stocks = [item['stock_id'] for item in res.data]
+        print(f"✅ 成功讀取 {len(stocks)} 檔股票")
+        return stocks
+    except Exception as e:
+        print(f"❌ 讀取股票清單失敗: {e}")
+        return ['2330.TW', '2317.TW', '2454.TW', '2881.TW', '2603.TW']
+
 def check_technical_exit(stock_id, strategy_name, p1, p2):
-    """
-    輔助函數：檢查這支股票是否出現「賣出訊號」
-    Returns: (bool 是否賣出, str 原因)
-    """
+    """檢查這支股票是否出現「技術賣訊」"""
     try:
         api = DataLoader()
-        if FINMIND_TOKEN:
-            api.login_by_token(api_token=FINMIND_TOKEN)
+        if FINMIND_TOKEN: api.login_by_token(api_token=FINMIND_TOKEN)
         
         start_date = (date.today() - timedelta(days=100)).strftime('%Y-%m-%d')
-        df = api.taiwan_stock_daily(
-            stock_id=stock_id,
-            start_date=start_date,
-            end_date=date.today().strftime('%Y-%m-%d')
-        )
+        df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=date.today().strftime('%Y-%m-%d'))
         
-        if df.empty or len(df) < max(p1, p2, 30):
-            return False, "資料不足"
-        
+        if df.empty or len(df) < max(p1, p2, 30): return False, "資料不足"
         df = df.sort_values('date')
         
         if strategy_name == 'MA_CROSS':
-            # 賣點：死亡交叉 (短線跌破長線)
-            df['MA_Short'] = ta.sma(df['close'], length=p1)
-            df['MA_Long'] = ta.sma(df['close'], length=p2)
-            curr_short, curr_long = df.iloc[-1]['MA_Short'], df.iloc[-1]['MA_Long']
-            prev_short, prev_long = df.iloc[-2]['MA_Short'], df.iloc[-2]['MA_Long']
-            if prev_short > prev_long and curr_short < curr_long:
+            df['MA_S'] = ta.sma(df['close'], length=p1)
+            df['MA_L'] = ta.sma(df['close'], length=p2)
+            if df.iloc[-2]['MA_S'] > df.iloc[-2]['MA_L'] and df.iloc[-1]['MA_S'] < df.iloc[-1]['MA_L']:
                 return True, f"均線死亡交叉 (MA{p1} < MA{p2})"
 
         elif strategy_name == 'RSI_REVERSAL':
-            # 賣點：RSI 進入超買區 (>70) 並且掉頭向下
             df['RSI'] = ta.rsi(df['close'], length=p1)
             curr_rsi, prev_rsi = df.iloc[-1]['RSI'], df.iloc[-2]['RSI']
             if prev_rsi > 70 and curr_rsi < prev_rsi:
                 return True, f"RSI 超買區反轉 (RSI={curr_rsi:.1f})"
 
         elif strategy_name == 'KD_CROSS':
-            # 賣點：KD 高檔死亡交叉 (K < D 且 K > 80)
             kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
             k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
-            curr_k, curr_d = kdf.iloc[-1][k_col], kdf.iloc[-1][d_col]
-            prev_k, prev_d = kdf.iloc[-2][k_col], kdf.iloc[-2][d_col]
-            if prev_k > prev_d and curr_k < curr_d and curr_k > 80:
-                return True, f"KD 高檔死亡交叉 (K={curr_k:.1f})"
+            if kdf.iloc[-2][k_col] > kdf.iloc[-2][d_col] and kdf.iloc[-1][k_col] < kdf.iloc[-1][d_col] and kdf.iloc[-1][k_col] > 80:
+                return True, f"KD 高檔死亡交叉 (K={kdf.iloc[-1][k_col]:.1f})"
                 
     except Exception as e:
         print(f"❌ 計算賣出指標失敗 {stock_id}: {e}")
-    
     return False, ""
 
+# --- 3. 核心功能 ---
+
 def run_prediction():
-    print(f"🤖 [盤前] 開始 AI 策略運算... {date.today()}")
+    print(f"🤖 [盤前] 開始全市場 AI 掃描... {date.today()}")
     config = get_strategy_config()
+    all_stocks = get_all_stocks_from_db()
+    
     strategy_name = config.get('active_strategy', 'MA_CROSS')
     p1, p2 = int(config.get('param_1', 5)), int(config.get('param_2', 20))
     risk_pref = config.get('risk_preference', 'NEUTRAL')
     base_size = float(config.get('max_position_size', 100000))
-    base_threshold = float(config.get('ai_confidence_threshold', 0.7))
-    
-    size_multiplier, threshold_adj = 1.0, 0.0
-    if risk_pref == 'AVERSE': size_multiplier, threshold_adj = 0.8, 0.05
-    elif risk_pref == 'SEEKING': size_multiplier, threshold_adj = 1.2, -0.05
-
+    size_multiplier = {'AVERSE': 0.8, 'NEUTRAL': 1.0, 'SEEKING': 1.2}.get(risk_pref, 1.0)
     final_trade_size = base_size * size_multiplier
-    final_threshold = base_threshold + threshold_adj
     
-    print(f"🧠 邏輯: {strategy_name}, 信心門檻: {final_threshold:.2f}")
-    
-    target_stocks = ['2330.TW', '2317.TW', '2454.TW', '2881.TW', '2603.TW']
+    print(f"🧠 策略: {strategy_name} ({p1},{p2}) | 風險模式: {risk_pref} | 單筆預算: ${final_trade_size:,.0f}")
+
     api = DataLoader()
     if FINMIND_TOKEN: api.login_by_token(api_token=FINMIND_TOKEN)
+    start_date = (date.today() - timedelta(days=120)).strftime('%Y-%m-%d')
     
-    start_date = (date.today() - timedelta(days=100)).strftime('%Y-%m-%d')
-    try:
-        df_history = api.taiwan_stock_daily(stock_id=target_stocks, start_date=start_date, end_date=date.today().strftime('%Y-%m-%d'))
-    except: return
-
-    if df_history.empty: return
-
-    orders_data = []
     try:
         account = supabase.table('sim_account').select('*').eq('user_id', 'default_user').execute().data[0]
         current_cash = float(account['cash_balance'])
     except: return
     
-    for stock_id in target_stocks:
-        df = df_history[df_history['stock_id'] == stock_id].copy()
-        if len(df) < max(p1, p2, 30): continue
-        df = df.sort_values('date')
-        signal, limit_price = False, float(df.iloc[-1]['close'])
-        
+    orders_data = []
+    BATCH_SIZE = 50
+    
+    for i in tqdm(range(0, len(all_stocks), BATCH_SIZE), desc="Analyzing Market"):
+        batch_stocks = all_stocks[i : i + BATCH_SIZE]
         try:
-            if strategy_name == 'MA_CROSS':
-                df['MA_Short'], df['MA_Long'] = ta.sma(df['close'], length=p1), ta.sma(df['close'], length=p2)
-                if df.iloc[-2]['MA_Short'] < df.iloc[-2]['MA_Long'] and df.iloc[-1]['MA_Short'] > df.iloc[-1]['MA_Long']: signal = True
-            elif strategy_name == 'RSI_REVERSAL':
-                df['RSI'] = ta.rsi(df['close'], length=p1)
-                if df.iloc[-2]['RSI'] < p2 and df.iloc[-1]['RSI'] > df.iloc[-2]['RSI']: signal, limit_price = True, limit_price * 0.99
-            elif strategy_name == 'KD_CROSS':
-                kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
-                k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
-                if kdf.iloc[-2][k_col] < kdf.iloc[-2][d_col] and kdf.iloc[-1][k_col] > kdf.iloc[-1][d_col] and kdf.iloc[-1][k_col] < p2: signal = True
-        except: continue
+            df_batch = api.taiwan_stock_daily(stock_id=batch_stocks, start_date=start_date, end_date=date.today().strftime('%Y-%m-%d'))
+            if df_batch.empty: continue
 
-        if signal:
-            shares = int(final_trade_size // limit_price)
-            shares = (shares // 1000) * 1000 
-            if shares <= 0: continue
-            cost, _ = calculate_cost(limit_price, shares)
-            if current_cash >= cost:
-                orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
-                current_cash -= cost
-                print(f"✅ {stock_id} 符合策略，準備掛單 {shares} 股")
+            for stock_id, df in df_batch.groupby('stock_id'):
+                if len(df) < p2 + 5: continue
+                df = df.sort_values('date')
+                limit_price = float(df.iloc[-1]['close'])
+                signal = False
+                
+                try:
+                    if strategy_name == 'MA_CROSS':
+                        df['MA_S'], df['MA_L'] = ta.sma(df['close'], length=p1), ta.sma(df['close'], length=p2)
+                        if df.iloc[-2]['MA_S'] < df.iloc[-2]['MA_L'] and df.iloc[-1]['MA_S'] > df.iloc[-1]['MA_L']: signal = True
+                    elif strategy_name == 'RSI_REVERSAL':
+                        df['RSI'] = ta.rsi(df['close'], length=p1)
+                        if df.iloc[-2]['RSI'] < p2 and df.iloc[-1]['RSI'] > df.iloc[-2]['RSI']: signal, limit_price = True, limit_price * 0.99
+                    elif strategy_name == 'KD_CROSS':
+                        kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
+                        k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
+                        if df.iloc[-2][k_col] < df.iloc[-2][d_col] and df.iloc[-1][k_col] > df.iloc[-1][d_col] and df.iloc[-1][k_col] < p2: signal = True
+                except: continue
 
-    if orders_data: supabase.table('sim_orders').insert(orders_data).execute()
+                if signal:
+                    shares = int(final_trade_size // limit_price // 1000) * 1000
+                    if shares > 0:
+                        est_cost, _ = calculate_cost(limit_price, shares)
+                        if current_cash >= est_cost:
+                            orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
+                            current_cash -= est_cost
+        except: time.sleep(1)
+
+    if orders_data:
+        real_account = supabase.table('sim_account').select('cash_balance').eq('user_id', 'default_user').execute().data[0]
+        real_cash = float(real_account['cash_balance'])
+        final_orders = []
+        for order in orders_data:
+            cost, _ = calculate_cost(order['order_price'], order['shares'])
+            if real_cash >= cost:
+                final_orders.append(order)
+                real_cash -= cost
+        if final_orders:
+            supabase.table('sim_orders').insert(final_orders).execute()
+            print(f"🚀 掃描完成！已送出 {len(final_orders)} 筆委託單")
+        else: print("💸 資金不足以執行任何訂單")
+    else: print("💤 今日無符合策略之標的")
 
 def run_settlement():
     print(f"⚖️ [盤後] 開始結算... {date.today()}")
@@ -181,7 +182,6 @@ def run_settlement():
     if FINMIND_TOKEN: api.login_by_token(api_token=FINMIND_TOKEN)
     today_str = date.today().strftime('%Y-%m-%d')
     
-    # 1. 處理待成交訂單
     try:
         pending_orders = supabase.table('sim_orders').select('*').eq('status', 'PENDING').execute().data
         if pending_orders:
@@ -208,7 +208,6 @@ def run_settlement():
                 supabase.table('sim_account').update({'cash_balance': cash}).eq('user_id', 'default_user').execute()
     except: pass
 
-    # 2. 檢查停損停利 (AI 出場)
     print("🔍 檢查庫存 (停損 / 停利 / AI出場)...")
     try:
         config = get_strategy_config()
@@ -230,14 +229,12 @@ def run_settlement():
                     close_price, avg_cost = float(stock_data.iloc[0]['close']), float(item['avg_cost'])
                     roi = (close_price - avg_cost) / avg_cost
                     action, reason = None, ""
-                    
                     if roi <= -stop_loss_pct: action, reason = 'SELL', f"🛑 停損 ({roi*100:.2f}%)"
                     elif take_profit_pct > 0:
                         if roi >= take_profit_pct: action, reason = 'SELL', f"💰 固定停利 ({roi*100:.2f}%)"
                     elif roi > 0:
                         should_sell, tech_reason = check_technical_exit(item['stock_id'], active_strat, p1, p2)
                         if should_sell: action, reason = 'SELL', f"🤖 AI 技術出場: {tech_reason} ({roi*100:.2f}%)"
-                    
                     if action == 'SELL':
                         revenue, fee, tax = calculate_revenue(close_price, item['shares'])
                         supabase.table('sim_inventory').delete().eq('stock_id', item['stock_id']).execute()
