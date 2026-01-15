@@ -115,6 +115,58 @@ def check_technical_exit(stock_id, strategy_name, p1, p2):
         print(f"❌ 計算賣出指標失敗 {stock_id}: {e}")
     return False, ""
 
+def calculate_confidence(df, strategy_name, p1, p2):
+    """
+    計算 AI 對該訊號的信心度 (0.0 ~ 1.0)
+    邏輯：根據指標的「超買/超賣」程度或「均線偏離度」來加權
+    """
+    try:
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        if strategy_name == 'MA_CROSS':
+            # 均線金叉信心：看短均線往上衝的斜率
+            slope = (last['MA_S'] - prev['MA_S']) / prev['MA_S']
+            conf = min(0.5 + (slope * 50), 0.95) # 基礎 0.5，最高 0.95
+            return round(conf, 2)
+            
+        elif strategy_name == 'RSI_REVERSAL':
+            # RSI 信心：RSI 越低代表超賣越嚴重，反彈信心越高
+            rsi_val = last['RSI']
+            conf = 1.0 - (rsi_val / 100.0) # RSI 20 -> 0.8
+            return round(conf, 2)
+            
+        elif strategy_name == 'KD_CROSS':
+            # KD 信心：看 K 值在低檔的位置
+            k_col = f"STOCHk_{p1}_3_3"
+            k_val = last[k_col]
+            conf = 1.0 - (k_val / 100.0)
+            return round(conf, 2)
+            
+        elif strategy_name == 'MACD_CROSS':
+            # MACD 信心：看柱狀圖翻紅的大小
+            hist_col = f"MACDh_{p1}_{p2}_9"
+            val = last[hist_col]
+            conf = 0.5 + min(abs(val) / 2, 0.45)
+            return round(conf, 2)
+            
+        elif strategy_name == 'N1_MOMENTUM':
+            # N1 信心：看動能強度與 RSI 是否有足夠空間
+            momentum = last.get('momentum', 0)
+            rsi = last.get('RSI', 50)
+            conf = 0.4 + (momentum * 2) + (1.0 - (rsi / 100.0)) * 0.2
+            return min(round(conf, 2), 0.98)
+
+        elif strategy_name == 'BEST_OF_3':
+            # Best of 3 信心：跌幅越深信心越高
+            drawdown = abs(last.get('drawdown', 0))
+            conf = 0.6 + (drawdown * 2)
+            return min(round(conf, 2), 0.99)
+
+    except:
+        pass
+    return 0.75 # 預設信心
+
 # --- 3. 核心功能 ---
 
 def run_prediction():
@@ -129,10 +181,11 @@ def run_prediction():
     # 讀取風控與資金
     risk_pref = config.get('risk_preference', 'NEUTRAL')
     base_size = float(config.get('max_position_size', 100000))
+    conf_threshold = float(config.get('ai_confidence_threshold', 0.7))
     size_multiplier = {'AVERSE': 0.8, 'NEUTRAL': 1.0, 'SEEKING': 1.2}.get(risk_pref, 1.0)
     final_trade_size = base_size * size_multiplier
     
-    print(f"🧠 策略: {strategy_name} ({p1},{p2}) | 風險模式: {risk_pref} | 單筆預算: ${final_trade_size:,.0f}")
+    print(f"🧠 策略: {strategy_name} ({p1},{p2}) | 信心門檻: {conf_threshold} | 風險模式: {risk_pref} | 單筆預算: ${final_trade_size:,.0f}")
 
     start_date = (date.today() - timedelta(days=300)).strftime('%Y-%m-%d')
     
@@ -142,6 +195,13 @@ def run_prediction():
     except: return
     
     orders_data = []
+
+    # 取得現有庫存與掛單，避免重複買入
+    try:
+        inventory = [i['stock_id'] for i in supabase.table('sim_inventory').select('stock_id').eq('user_id', 'default_user').execute().data]
+        pending = [o['stock_id'] for o in supabase.table('sim_orders').select('stock_id').eq('user_id', 'default_user').eq('status', 'PENDING').execute().data]
+        owned_stocks = set(inventory + pending)
+    except: owned_stocks = set()
 
     # ==========================================
     # 🏆 策略 1: N1 Momentum (強者恆強 + 避險)
@@ -197,8 +257,23 @@ def run_prediction():
         for stock in final_buy_list:
             price = [x['price'] for x in candidates if x['stock_id'] == stock][0]
             shares = int(budget_per_stock // price)
-            if shares > 0:
-                orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock, 'action': 'BUY', 'order_price': round(price, 2), 'shares': shares, 'status': 'PENDING'})
+            if shares > 0 and stock not in owned_stocks:
+                # 計算信心度
+                df_stock = df_all[df_all['stock_id'] == stock].copy()
+                df_stock['momentum'] = [x['momentum'] for x in candidates if x['stock_id'] == stock][0]
+                df_stock['RSI'] = [x['rsi'] for x in candidates if x['stock_id'] == stock][0]
+                confidence = calculate_confidence(df_stock, 'N1_MOMENTUM', p1, p2)
+                
+                if confidence >= conf_threshold:
+                    orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock, 'action': 'BUY', 'order_price': round(price, 2), 'shares': shares, 'status': 'PENDING'})
+                    # 寫入 AI 分析表
+                    supabase.table('ai_analysis').upsert({
+                        'stock_id': stock, 'date': str(date.today()), 'signal': 'Bull', 
+                        'probability': confidence, 'entry_price': round(price, 2),
+                        'target_price': round(price * 1.1, 2), 'stop_loss': round(price * 0.95, 2)
+                    }).execute()
+                else:
+                    print(f"   ⚠️ {stock} 信心度不足 ({confidence} < {conf_threshold})")
 
         # 處理避險
         if len(final_buy_list) < 2:
@@ -249,8 +324,21 @@ def run_prediction():
             best_dip = candidates[0]
             print(f"🎯 鎖定抄底標的: {best_dip['stock_id']} (回撤 {best_dip['drawdown']*100:.2f}%)")
             shares = int(final_trade_size // best_dip['price'])
-            if shares > 0:
-                orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': best_dip['stock_id'], 'action': 'BUY', 'order_price': round(best_dip['price'], 2), 'shares': shares, 'status': 'PENDING'})
+            if shares > 0 and best_dip['stock_id'] not in owned_stocks:
+                # 計算信心度
+                df_dip = df_all[df_all['stock_id'] == best_dip['stock_id']].copy()
+                df_dip['drawdown'] = best_dip['drawdown']
+                confidence = calculate_confidence(df_dip, 'BEST_OF_3', p1, p2)
+                
+                if confidence >= conf_threshold:
+                    orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': best_dip['stock_id'], 'action': 'BUY', 'order_price': round(best_dip['price'], 2), 'shares': shares, 'status': 'PENDING'})
+                    supabase.table('ai_analysis').upsert({
+                        'stock_id': best_dip['stock_id'], 'date': str(date.today()), 'signal': 'Bull', 
+                        'probability': confidence, 'entry_price': round(best_dip['price'], 2),
+                        'target_price': round(best_dip['price'] * 1.15, 2), 'stop_loss': round(best_dip['price'] * 0.93, 2)
+                    }).execute()
+                else:
+                    print(f"   ⚠️ {best_dip['stock_id']} 信心度不足 ({confidence} < {conf_threshold})")
         else:
             print("💤 沒有優質股符合抄底條件 (需在長線支撐之上)")
 
@@ -290,16 +378,25 @@ def run_prediction():
                             if df.iloc[-2][hist_col] < 0 and df.iloc[-1][hist_col] > 0: signal = True
                     except: continue
 
-                    if signal:
-                        try:
-                            supabase.table('ai_analysis').upsert({'stock_id': stock_id, 'date': str(date.today()), 'signal': 'Bull', 'entry_price': round(limit_price, 2)}).execute()
-                        except: pass
-                        shares = int(final_trade_size // limit_price)
-                        if shares > 0:
-                            est_cost, _ = calculate_cost(limit_price, shares)
-                            if current_cash >= est_cost:
-                                orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
-                                current_cash -= est_cost
+                    if signal and stock_id not in owned_stocks:
+                        confidence = calculate_confidence(df, strategy_name, p1, p2)
+                        if confidence >= conf_threshold:
+                            try:
+                                supabase.table('ai_analysis').upsert({
+                                    'stock_id': stock_id, 'date': str(date.today()), 'signal': 'Bull', 
+                                    'probability': confidence, 'entry_price': round(limit_price, 2),
+                                    'target_price': round(limit_price * 1.1, 2), 'stop_loss': round(limit_price * 0.95, 2)
+                                }).execute()
+                            except: pass
+                            
+                            shares = int(final_trade_size // limit_price)
+                            if shares > 0:
+                                est_cost, _ = calculate_cost(limit_price, shares)
+                                if current_cash >= est_cost:
+                                    orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
+                                    current_cash -= est_cost
+                        else:
+                            pass # 信心不足不掛單
             except: time.sleep(1)
 
     # 3. 寫入資料庫 (通用)
