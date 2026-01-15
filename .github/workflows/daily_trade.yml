@@ -2,16 +2,22 @@ name: Daily AI Trading Bot
 
 on:
   schedule:
-    - cron: '0 21 * * 0-4' 
-    - cron: '30 7 * * 1-5'
+    - cron: '0 21 * * 0-4'  # 週一到五 05:00 TWT (UTC 21:00) -> 預測
+    - cron: '30 7 * * 1-5'  # 週一到五 15:30 TWT (UTC 07:30) -> 結算
+    - cron: '0 2 * * 6'     # 每週六 10:00 TWT (UTC 02:00) -> AI 自我學習
   workflow_dispatch:
     inputs:
-      action:
-        description: '執行動作 (predict 或 settle)'
+      action_mode:
+        description: '執行模式 (predict/settle/learn)'
         required: true
         default: 'predict'
+        type: choice
+        options:
+          - predict
+          - settle
+          - learn
 
-# 👇 修改重點 1：把 env 移到最外面，這樣整個檔案裡的所有步驟都能用
+# 全域環境變數，所有步驟皆可讀取
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -24,19 +30,18 @@ jobs:
     
     steps:
     - name: 下載程式碼
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 設定 Python 環境
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: "3.12"
 
     - name: 安裝套件
       run: |
-        # 👇 補上 tqdm 與 pandas_ta 即可
+        python -m pip install --upgrade pip
         pip install supabase finmind pandas plotly tqdm pandas_ta
 
-    # 👇 修改重點 2：我加了一個「偵探步驟」，幫您檢查變數到底有沒有進來
     - name: Debug - 檢查金鑰狀態
       run: |
         echo "正在檢查金鑰..."
@@ -50,19 +55,30 @@ jobs:
       id: check_schedule
       run: |
         current_hour=$(date +%H)
-        # UTC 21:00 (TWT 05:00) 判定為預測，UTC 07:30 (TWT 15:30) 判定為結算
-        if [ "$current_hour" -gt "12" ]; then
+        day_of_week=$(date +%u) # 1=Mon, 6=Sat, 7=Sun
+        
+        if [ "$day_of_week" == "6" ]; then
+          echo "action=learn" >> $GITHUB_OUTPUT
+        elif [ "$current_hour" -gt "12" ]; then
+          # UTC 21:00 (TWT 05:00) > 12 -> predict
           echo "action=predict" >> $GITHUB_OUTPUT
         else
+          # UTC 07:30 (TWT 15:30) <= 12 -> settle
           echo "action=settle" >> $GITHUB_OUTPUT
         fi
       
     - name: 執行 AI 交易機器人
-      # 👇 因為上面已經設定了全域 env，這裡不需要再寫一次 env
       run: |
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-           python auto_trade.py --action ${{ inputs.action }}
-        else
-           python auto_trade.py --action ${{ steps.check_schedule.outputs.action }}
+        # 優先使用手動輸入的模式，若無則使用自動判斷的模式
+        action_mode="${{ github.event.inputs.action_mode }}"
+        if [ -z "$action_mode" ]; then
+           action_mode="${{ steps.check_schedule.outputs.action }}"
         fi
 
+        echo "🚀 正在以 $action_mode 模式執行..."
+
+        if [ "$action_mode" == "learn" ]; then
+           python auto_learn.py
+        else
+           python auto_trade.py --action $action_mode
+        fi
