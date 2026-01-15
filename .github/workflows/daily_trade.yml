@@ -1,0 +1,55 @@
+name: Daily AI Trading Bot
+
+on:
+  schedule:
+    # 台灣早上 08:30 = UTC 00:30 (盤前預測)
+    - cron: '30 0 * * 1-5' 
+    # 台灣下午 15:30 = UTC 07:30 (盤後結算)
+    - cron: '30 7 * * 1-5'
+    
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '執行動作 (predict 或 settle)'
+        required: true
+        default: 'predict'
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 下載程式碼
+      uses: actions/checkout@v3
+
+    - name: 設定 Python 環境
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12" # 與專案其他 workflow 保持一致
+
+    - name: 安裝套件
+      run: |
+        pip install -r requirements.txt
+
+    - name: 判斷執行模式 (自動排程)
+      id: check_schedule
+      run: |
+        current_hour=$(date +%H)
+        if [ "$current_hour" -lt "4" ]; then
+          echo "action=predict" >> $GITHUB_OUTPUT
+        else
+          echo "action=settle" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 執行 AI 交易機器人
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+           python auto_trade.py --action ${{ inputs.action }}
+        else
+           python auto_trade.py --action ${{ steps.check_schedule.outputs.action }}
+        fi
