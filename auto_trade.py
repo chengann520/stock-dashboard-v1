@@ -165,6 +165,16 @@ def run_prediction():
                 except: continue
 
                 if signal:
+                    # 記錄 AI 預測訊號
+                    try:
+                        supabase.table('ai_analysis').upsert({
+                            'stock_id': stock_id,
+                            'date': str(date.today()),
+                            'signal': 'Bull',
+                            'entry_price': round(limit_price, 2)
+                        }).execute()
+                    except: pass
+
                     shares = int(final_trade_size // limit_price // 1000) * 1000
                     if shares > 0:
                         est_cost, _ = calculate_cost(limit_price, shares)
