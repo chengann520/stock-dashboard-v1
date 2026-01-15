@@ -165,6 +165,18 @@ def run_settlement():
                     print(f"🎯 成交賣出: {order['stock_id']} @ {order['order_price']}")
 
             if executed:
+                # 紀錄到 sim_transactions
+                supabase.table('sim_transactions').insert({
+                    'user_id': 'default_user',
+                    'stock_id': order['stock_id'],
+                    'action': order['action'],
+                    'price': order['order_price'],
+                    'shares': order['shares'],
+                    'fee': fee,
+                    'tax': tax,
+                    'total_amount': total_amount
+                }).execute()
+
                 supabase.table('sim_orders').update({
                     'status': 'FILLED',
                     'fee': fee,
@@ -183,7 +195,7 @@ def run_settlement():
         # 更新最終現金
         supabase.table('sim_account').update({'cash_balance': cash}).eq('user_id', 'default_user').execute()
         
-        # 計算總資產 (現金 + 持股價值)
+        # 計算總資產 (現金 + 持股價值) 並紀錄每日快照
         calculate_total_assets(cash)
         
         print("✅ 結算完成")
@@ -199,7 +211,7 @@ def update_inventory(stock_id, shares, price):
             if new_shares > 0:
                 # 更新平均成本 (僅買入時更新)
                 if shares > 0:
-                    total_cost = (inv[0]['shares'] * inv[0]['avg_cost']) + (shares * price)
+                    total_cost = (float(inv[0]['shares']) * float(inv[0]['avg_cost'])) + (float(shares) * float(price))
                     avg_cost = total_cost / new_shares
                 else:
                     avg_cost = inv[0]['avg_cost']
@@ -222,18 +234,27 @@ def update_inventory(stock_id, shares, price):
         print(f"❌ 庫存更新錯誤: {e}")
 
 def calculate_total_assets(cash):
-    """計算總資產"""
+    """計算總資產並存入每日快照"""
     try:
         inventory = supabase.table('sim_inventory').select('*').eq('user_id', 'default_user').execute().data
         stock_value = 0
         for item in inventory:
             # 取得最新收盤價
             last_price = supabase.table('fact_price').select('close').eq('stock_id', item['stock_id']).order('date', desc=True).limit(1).execute().data
-            price = last_price[0]['close'] if last_price else item['avg_cost']
-            stock_value += (price * item['shares'])
+            price = float(last_price[0]['close']) if last_price else float(item['avg_cost'])
+            stock_value += (price * int(item['shares']))
         
         total_asset = cash + stock_value
         supabase.table('sim_account').update({'total_asset': total_asset}).eq('user_id', 'default_user').execute()
+
+        # 紀錄每日快照
+        supabase.table('sim_daily_assets').upsert({
+            'user_id': 'default_user',
+            'date': str(date.today()),
+            'cash_balance': cash,
+            'stock_value': stock_value,
+            'total_assets': total_asset
+        }).execute()
     except Exception as e:
         print(f"❌ 總資產計算錯誤: {e}")
 
