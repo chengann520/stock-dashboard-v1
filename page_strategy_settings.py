@@ -61,8 +61,8 @@ def show_strategy_settings_page():
         
         # 定義策略選項與說明
         strategies = {
-            'N1_MOMENTUM': '🏆 N1 策略 (動能 + 國債避險)',
-            'BEST_OF_3': '🚀 Best of 3 (抄底策略)',
+            'N1_MOMENTUM': '🏆 N1 策略 (首選：極致穩定)',
+            'BEST_OF_3': '🚀 Best of 3 (進階：高回報抄底)',
             'MA_CROSS': '📈 均線黃金交叉 (趨勢策略)',
             'RSI_REVERSAL': '📉 RSI 低檔反彈 (逆勢策略)',
             'KD_CROSS': '🔁 KD 低檔金叉 (波段策略)',
@@ -83,22 +83,20 @@ def show_strategy_settings_page():
             index=curr_idx
         )
 
-        # === 動態參數區 (根據上面的選擇變換) ===
-        st.info("👇 請設定該策略的詳細參數：")
+        # === 參數區 (隱藏，由 AI 教練自動管理) ===
+        p1 = p1_val if p1_val > 0 else (60 if selected_strategy == 'N1_MOMENTUM' else 5)
+        p2 = p2_val if p2_val > 0 else (80 if selected_strategy == 'N1_MOMENTUM' else 20)
         
-        # 預設值讀取
-        p1_val = int(config.get('param_1', 0))
-        p2_val = int(config.get('param_2', 0))
-        
-        col_p1, col_p2 = st.columns(2)
-        
-        # 參數 1 & 2 的意義會隨策略改變
         if selected_strategy == 'N1_MOMENTUM':
-            st.success("🏆 **N1 策略邏輯**：\n1. 鎖定台股科技巨頭 (如台積電、聯發科...)\n2. 買進「漲勢最強」的前 2 名。\n3. 若大盤不穩或 RSI 過熱，自動轉進「債券 ETF (00679B)」避險。")
-            with col_p1:
-                p1 = st.number_input("動能週期 (天)", value=p1_val if p1_val>0 else 60, help="計算過去幾天的漲幅來排名 (預設 60天/一季)")
-            with col_p2:
-                p2 = st.number_input("RSI 安全門檻", value=p2_val if p2_val>0 else 80, help="RSI 超過此數值代表過熱，不追高")
+            st.success("""
+            **🏆 首選推薦：Composer "N1" 策略**
+            *這目前最適合「長期持有」且「睡得著覺」的穩定型策略。*
+            
+            **運作邏輯：**
+            1. **選股**：每天從 10 檔科技巨頭中，挑選出近期漲勢最強的 2 檔。
+            2. **安全檢查**：檢查標的是否過熱 (RSI) 以及是否處於上升趨勢。
+            3. **避險機制**：若市場有危險訊號，資金自動轉向「現金」或「美債 ETF」。
+            """)
             
             st.divider()
             st.write("🛡️ **避險模式設定**")
@@ -111,39 +109,15 @@ def show_strategy_settings_page():
             final_safe_asset = 'CASH' if "現金" in safe_option else '00679B.TW'
 
         elif selected_strategy == 'BEST_OF_3':
-            st.success("🚀 **Best of 3 (改量版) 邏輯**：\n模擬 Composer 的抄底邏輯。系統會監控一籃子優質股，專門買進「近期跌最深 (Drawdown 最大)」但「長線趨勢仍向上」的股票，賭它均值回歸。")
-            with col_p1:
-                p1 = st.number_input("回撤觀察期 (天)", value=p1_val if p1_val>0 else 20, help="看過去幾天內的跌幅")
-            with col_p2:
-                p2 = st.number_input("長線保護 (MA天數)", value=p2_val if p2_val>0 else 200, help="股價必須在年線之上才敢抄底")
-
-        elif selected_strategy == 'MA_CROSS':
-            with col_p1:
-                p1 = st.number_input("短期均線 (MA Short)", value=p1_val if p1_val>0 else 5, min_value=3)
-            with col_p2:
-                p2 = st.number_input("長期均線 (MA Long)", value=p2_val if p2_val>0 else 20, min_value=10)
-            st.caption("邏輯：當 短均線 向上突破 長均線 時買進。")
+            st.warning("""
+            **🚀 進階推薦：The Best of Three**
+            *追求 2025 年目前數據表現最強的策略，適合風險承受度稍高的投資者。*
             
-        elif selected_strategy == 'RSI_REVERSAL':
-            with col_p1:
-                p1 = st.number_input("RSI 週期 (通常 14)", value=p1_val if p1_val>0 else 14)
-            with col_p2:
-                p2 = st.number_input("超賣區門檻 (通常 30)", value=p2_val if p2_val>0 else 30)
-            st.caption("邏輯：當 RSI 低於門檻且開始回升時買進。")
-            
-        elif selected_strategy == 'KD_CROSS':
-            with col_p1:
-                p1 = st.number_input("RSV 週期 (通常 9)", value=p1_val if p1_val>0 else 9)
-            with col_p2:
-                p2 = st.number_input("KD 低檔門檻 (通常 20)", value=p2_val if p2_val>0 else 20)
-            st.caption("邏輯：當 K值由下往上突破 D值，且 K值 < 門檻時買進。")
- 
-        elif selected_strategy == 'MACD_CROSS':
-            with col_p1:
-                p1 = st.number_input("快線 EMA (通常 12)", value=p1_val if p1_val>0 else 12)
-            with col_p2:
-                p2 = st.number_input("慢線 EMA (通常 26)", value=p2_val if p2_val>0 else 26)
-            st.caption("邏輯：當 MACD 柱狀體由綠翻紅 (或快線突破慢線) 時買進。")
+            **運作邏輯：**
+            1. **抄底邏輯**：監控優質股池，專門買進「近期跌最深 (Drawdown 最大)」的股票。
+            2. **均值回歸**：賭它即將觸底反彈，吃到反彈最肥美的一段利潤。
+            3. **長線保護**：股價必須在年線之上才敢抄底，確保不是買到爛股。
+            """)
 
         st.divider()
 
@@ -161,19 +135,12 @@ def show_strategy_settings_page():
                                      index=list(risk_options.keys()).index(curr_r_key) if curr_r_key in risk_options else 1)
             
             max_pos = st.number_input("單筆交易預算 (NTD)", value=int(config.get('max_position_size', 100000)), step=10000)
+            stop_loss = st.slider("🛑 停損點 (Stop Loss %)", 0.01, 0.30, float(config.get('stop_loss_pct', 0.05)))
 
         with c_risk2:
-            stop_loss = st.slider("🛑 停損點 (Stop Loss %)", 0.01, 0.30, float(config.get('stop_loss_pct', 0.05)))
-            
-            # 停利設定 (包含 AI 動態停利)
-            curr_tp = float(config.get('take_profit_pct', 0.1))
-            use_ai_exit = st.checkbox("由 AI 決定何時賣出 (動態停利)", value=(curr_tp == 0))
-            
-            if use_ai_exit:
-                take_profit = 0.0
-                st.caption("🤖 AI 將在技術指標轉弱時賣出 (例如均線死叉)")
-            else:
-                take_profit = st.slider("💰 固定停利點 %", 0.05, 1.00, 0.1 if curr_tp==0 else curr_tp)
+            st.write("💰 **獲利出場設定**")
+            st.info("🤖 **AI 自動判斷**：系統將根據技術指標轉弱時自動賣出，以追求最大化利潤。")
+            take_profit = 0.0
 
         st.divider()
         
