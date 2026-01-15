@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS strategy_config (
     ai_confidence_threshold DECIMAL(16, 4) DEFAULT 0.7,
     active_strategy VARCHAR(50) DEFAULT 'MA_CROSS',
     risk_preference VARCHAR(20) DEFAULT 'NEUTRAL',
+    safe_asset_id VARCHAR(20) DEFAULT '00679B.TW',
     param_1 INTEGER DEFAULT 5,
     param_2 INTEGER DEFAULT 20,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
