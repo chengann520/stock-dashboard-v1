@@ -36,63 +36,90 @@ def calculate_revenue(price, shares):
 
 # --- 2. 定義功能函數 ---
 
+def get_strategy_config():
+    """從資料庫讀取使用者設定"""
+    try:
+        # 讀取設定表
+        data = supabase.table('strategy_config').select('*').eq('user_id', 'default_user').execute().data
+        if data:
+            return data[0]
+    except Exception as e:
+        print(f"⚠️ 讀取策略設定失敗，使用預設值: {e}")
+    
+    # 預設值 (萬一資料庫讀不到)
+    return {
+        'max_position_size': 100000,
+        'stop_loss_pct': 0.05,
+        'ai_confidence_threshold': 0.7
+    }
+
 def run_prediction():
-    """盤前：AI 預測並掛單"""
     print(f"🤖 [盤前] 開始 AI 預測... {date.today()}")
     
-    # 模擬產生預測信號 (實際應串接您的 AI 模型)
-    # 這裡示範從 dim_stock 隨機選兩檔股票
-    try:
-        stocks = supabase.table('dim_stock').select('stock_id').limit(10).execute().data
-        if not stocks:
-            print("⚠️ 資料庫中無股票資料")
-            return
-        
-        selected_stocks = random.sample(stocks, min(2, len(stocks)))
-        ai_predictions = []
-        for s in selected_stocks:
-            # 取得最後一筆收盤價作為參考
-            last_price_data = supabase.table('fact_price').select('close').eq('stock_id', s['stock_id']).order('date', desc=True).limit(1).execute().data
-            ref_price = last_price_data[0]['close'] if last_price_data else 500.0
-            
-            ai_predictions.append({
-                'stock_id': s['stock_id'], 
-                'action': 'BUY', 
-                'price': round(ref_price * random.uniform(0.98, 1.02), 2), 
-                'shares': 1000
-            })
-    except Exception as e:
-        print(f"❌ 預測邏輯錯誤: {e}")
-        return
+    # 1. 讀取最新策略設定
+    config = get_strategy_config()
+    print(f"⚙️ 目前策略: 模式={config.get('strategy_mode')}, 最大倉位=${config.get('max_position_size')}, 信心門檻={config.get('ai_confidence_threshold')}")
+
+    # === AI 邏輯區 (模擬) ===
+    # 假設這是 AI 算出來的原始信號
+    raw_predictions = [
+        {'stock_id': '2330.TW', 'action': 'BUY', 'price': 580.0, 'confidence': 0.85},
+        {'stock_id': '2881.TW', 'action': 'BUY', 'price': 62.5, 'confidence': 0.60}, # 信心較低
+        {'stock_id': '2603.TW', 'action': 'BUY', 'price': 150.0, 'confidence': 0.95}
+    ]
     
-    # 檢查資金並下單
     try:
         account = supabase.table('sim_account').select('*').eq('user_id', 'default_user').execute().data[0]
         current_cash = float(account['cash_balance'])
         
         orders_data = []
-        for pred in ai_predictions:
-            est_cost, _ = calculate_cost(pred['price'], pred['shares'])
+        
+        # 2. 應用策略過濾器
+        threshold = float(config.get('ai_confidence_threshold', 0.7))
+        max_trade_amt = float(config.get('max_position_size', 100000))
+
+        for pred in raw_predictions:
+            # 規則 A: 信心不足就不做
+            if pred['confidence'] < threshold:
+                print(f"❌ {pred['stock_id']} 信心 {pred['confidence']} 低於門檻 {threshold}，跳過")
+                continue
+                
+            # 規則 B: 計算股數 (不超過最大單筆金額)
+            shares_can_buy = int(max_trade_amt // pred['price'])
+            
+            # 轉成整張 (台股通常 1000 股一張)
+            shares_can_buy = (shares_can_buy // 1000) * 1000 
+            
+            if shares_can_buy <= 0:
+                print(f"⚠️ {pred['stock_id']} 資金配額不足以買一張，跳過")
+                continue
+
+            est_cost, _ = calculate_cost(pred['price'], shares_can_buy)
+            
+            # 規則 C: 總資金檢查
             if current_cash >= est_cost:
                 orders_data.append({
+                    'user_id': 'default_user',
                     'date': str(date.today()),
                     'stock_id': pred['stock_id'],
                     'action': pred['action'],
                     'order_price': pred['price'],
-                    'shares': pred['shares'],
+                    'shares': shares_can_buy,
                     'status': 'PENDING'
                 })
-                current_cash -= est_cost 
+                current_cash -= est_cost # 暫扣
+                print(f"✅ {pred['stock_id']} 符合策略，準備掛單 {shares_can_buy} 股")
             else:
-                print(f"⚠️ 資金不足，無法購買 {pred['stock_id']}")
+                print(f"⚠️ {pred['stock_id']} 帳戶餘額不足")
 
+        # 3. 寫入資料庫
         if orders_data:
             supabase.table('sim_orders').insert(orders_data).execute()
-            print(f"✅ 已送出 {len(orders_data)} 筆委託單到資料庫")
+            print(f"🚀 已送出 {len(orders_data)} 筆訂單")
         else:
-            print("⚠️ 無委託單送出")
+            print("💤 本日無符合策略的標的")
     except Exception as e:
-        print(f"❌ 下單邏輯錯誤: {e}")
+        print(f"❌ 預測邏輯錯誤: {e}")
 
 def run_settlement():
     """盤後：抓取真實股價並結算"""
@@ -148,10 +175,7 @@ def run_settlement():
             if order['action'] == 'BUY':
                 if row['low'] <= order['order_price']:
                     total_amount, fee = calculate_cost(order['order_price'], order['shares'])
-                    # 再次確認資金 (雖然預測時扣過了，但為了保險)
-                    # 注意：這裡的邏輯是預測時已經扣掉預估資金，所以這裡直接成交
                     executed = True
-                    # 更新庫存
                     update_inventory(order['stock_id'], order['shares'], order['order_price'])
                     print(f"🎯 成交買入: {order['stock_id']} @ {order['order_price']}")
             
@@ -160,7 +184,6 @@ def run_settlement():
                     total_amount, fee, tax = calculate_revenue(order['order_price'], order['shares'])
                     executed = True
                     cash += total_amount
-                    # 更新庫存 (刪除或減少)
                     update_inventory(order['stock_id'], -order['shares'], order['order_price'])
                     print(f"🎯 成交賣出: {order['stock_id']} @ {order['order_price']}")
 
