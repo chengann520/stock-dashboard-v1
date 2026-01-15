@@ -30,7 +30,9 @@ TECH_GIANTS = [
     '2308.TW', # 台達電
     '3711.TW', # 日月光
     '3008.TW', # 大立光
-    '3034.TW'  # 聯詠
+    '3034.TW', # 聯詠
+    '2303.TW', # 聯電
+    '2357.TW'  # 華碩
 ]
 SAFE_ASSET = '00679B.TW' # 元大美債20年 (作為避險資產)
 
@@ -145,7 +147,8 @@ def run_prediction():
     # 🏆 策略 1: N1 Momentum (強者恆強 + 避險)
     # ==========================================
     if strategy_name == 'N1_MOMENTUM':
-        print(f"🏆 執行 N1 策略 (池: {len(TECH_GIANTS)}檔科技股 | 動能: {p1}日)")
+        safe_asset_id = config.get('safe_asset_id', '00679B.TW')
+        print(f"🏆 執行 N1 策略 (池: {len(TECH_GIANTS)}檔科技股 | 動能: {p1}日) | 避險模式: {safe_asset_id}")
         candidates = []
         
         res = supabase.table('fact_price').select('*').in_('stock_id', TECH_GIANTS).gte('date', start_date).order('date').execute()
@@ -160,11 +163,14 @@ def run_prediction():
             df = df.sort_values('date')
             
             current_price = float(df.iloc[-1]['close'])
+            # 動能計算：過去 p1 天的漲幅
             momentum = (current_price / float(df.iloc[-1-p1]['close'])) - 1
             
+            # 安全檢查：RSI 是否過熱
             df['RSI'] = ta.rsi(df['close'], length=14)
             current_rsi = float(df.iloc[-1]['RSI'])
             
+            # 趨勢檢查：是否在 MA20 之上
             df['MA20'] = ta.sma(df['close'], length=20)
             trend_ok = current_price > float(df.iloc[-1]['MA20'])
             
@@ -173,41 +179,43 @@ def run_prediction():
                 'price': current_price, 'trend_ok': trend_ok
             })
             
+        # 排名：動能由高到低
         candidates.sort(key=lambda x: x['momentum'], reverse=True)
         top_picks = candidates[:2]
         final_buy_list = []
         
-        print("📊 N1 候選排名:")
+        print("📊 N1 候選排名 (Top 2):")
         for c in top_picks:
             print(f"   - {c['stock_id']}: 漲幅 {c['momentum']*100:.1f}%, RSI {c['rsi']:.1f}")
+            # 嚴格避險：只要過熱或破線就不買股票
             if c['rsi'] < p2 and c['trend_ok']:
                 final_buy_list.append(c['stock_id'])
             else:
-                print(f"   ⚠️ {c['stock_id']} 過熱或破線，觸發避險機制！")
+                print(f"   ⚠️ {c['stock_id']} 觸發安全防線 (RSI過熱或趨勢轉弱)")
         
         budget_per_stock = final_trade_size
         for stock in final_buy_list:
             price = [x['price'] for x in candidates if x['stock_id'] == stock][0]
-            shares = int(budget_per_stock // price // 1000) * 1000
+            shares = int(budget_per_stock // price)
             if shares > 0:
                 orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock, 'action': 'BUY', 'order_price': round(price, 2), 'shares': shares, 'status': 'PENDING'})
 
+        # 處理避險
         if len(final_buy_list) < 2:
             remaining_slots = 2 - len(final_buy_list)
-            safe_asset_id = config.get('safe_asset_id', '00679B.TW')
-            print(f"⚠️ {remaining_slots} 個部位觸發避險條件！(避險標的: {safe_asset_id})")
+            print(f"🛡️ {remaining_slots} 個部位啟動避險機制")
             
             if safe_asset_id == 'CASH':
-                print(f"🛡️ 啟動避險：持有現金 (CASH)，不進行下單。")
+                print(f"💰 避險模式：持有現金 (CASH)")
             else:
                 res_safe = supabase.table('fact_price').select('*').eq('stock_id', safe_asset_id).order('date', desc=True).limit(1).execute()
                 if res_safe.data:
                     safe_price = float(res_safe.data[0]['close'])
                     safe_budget = budget_per_stock * remaining_slots
-                    shares = int(safe_budget // safe_price // 1000) * 1000
+                    shares = int(safe_budget // safe_price)
                     if shares > 0:
                         orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': safe_asset_id, 'action': 'BUY', 'order_price': round(safe_price, 2), 'shares': shares, 'status': 'PENDING'})
-                        print(f"🛡️ 啟動避險：買入 {safe_asset_id} ({shares}股)")
+                        print(f"🛡️ 避險模式：買入 {safe_asset_id} ({shares}股)")
 
     # ==========================================
     # 🚀 策略 2: Best of 3 (Drawdown Reversal)
@@ -223,24 +231,28 @@ def run_prediction():
             if len(df) < 200: continue
             df = df.sort_values('date')
             current_price = float(df.iloc[-1]['close'])
+            
+            # 回撤計算：距離 p1 天內最高點的跌幅
             recent_high = df['high'].tail(p1).max()
             drawdown = (current_price - recent_high) / recent_high
             
-            df['MA200'] = ta.sma(df['close'], length=p2)
-            ma200 = float(df.iloc[-1]['MA200'])
+            # 長線保護：必須在 MA(p2) 之上 (預設 200)
+            df['MA_L'] = ta.sma(df['close'], length=p2)
+            ma_long = float(df.iloc[-1]['MA_L'])
             
-            if current_price > ma200:
+            if current_price > ma_long:
                 candidates.append({'stock_id': stock_id, 'drawdown': drawdown, 'price': current_price})
         
+        # 排序：回撤越大 (跌越深) 排前面
         candidates.sort(key=lambda x: x['drawdown'])
         if candidates:
             best_dip = candidates[0]
             print(f"🎯 鎖定抄底標的: {best_dip['stock_id']} (回撤 {best_dip['drawdown']*100:.2f}%)")
-            shares = int(final_trade_size // best_dip['price'] // 1000) * 1000
+            shares = int(final_trade_size // best_dip['price'])
             if shares > 0:
                 orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': best_dip['stock_id'], 'action': 'BUY', 'order_price': round(best_dip['price'], 2), 'shares': shares, 'status': 'PENDING'})
         else:
-            print("💤 沒有股票符合「年線之上 + 跌深」條件")
+            print("💤 沒有優質股符合抄底條件 (需在長線支撐之上)")
 
     # ==========================================
     # 原本的技術指標策略 (MA, RSI, KD...)
@@ -282,7 +294,7 @@ def run_prediction():
                         try:
                             supabase.table('ai_analysis').upsert({'stock_id': stock_id, 'date': str(date.today()), 'signal': 'Bull', 'entry_price': round(limit_price, 2)}).execute()
                         except: pass
-                        shares = int(final_trade_size // limit_price // 1000) * 1000
+                        shares = int(final_trade_size // limit_price)
                         if shares > 0:
                             est_cost, _ = calculate_cost(limit_price, shares)
                             if current_cash >= est_cost:
