@@ -49,3 +49,41 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
 -- Index for performance
 CREATE INDEX IF NOT EXISTS idx_fact_price_date ON fact_price(date);
 CREATE INDEX IF NOT EXISTS idx_ai_analysis_date ON ai_analysis(date);
+-- Table: sim_account (Simulation Account)
+CREATE TABLE IF NOT EXISTS sim_account (
+    user_id VARCHAR(50) PRIMARY KEY,
+    cash_balance DECIMAL(16, 4) DEFAULT 1000000,
+    total_asset DECIMAL(16, 4) DEFAULT 1000000,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table: sim_orders (Simulation Orders)
+CREATE TABLE IF NOT EXISTS sim_orders (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(50) DEFAULT 'default_user',
+    date DATE,
+    stock_id VARCHAR(20) REFERENCES dim_stock(stock_id),
+    action VARCHAR(10), -- 'BUY' or 'SELL'
+    order_price DECIMAL(16, 4),
+    shares INT,
+    status VARCHAR(20) DEFAULT 'PENDING', -- 'PENDING', 'FILLED', 'CANCELLED'
+    fee DECIMAL(16, 4) DEFAULT 0,
+    tax DECIMAL(16, 4) DEFAULT 0,
+    total_amount DECIMAL(16, 4),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table: sim_inventory (Simulation Inventory)
+CREATE TABLE IF NOT EXISTS sim_inventory (
+    user_id VARCHAR(50),
+    stock_id VARCHAR(20) REFERENCES dim_stock(stock_id),
+    shares INT,
+    avg_cost DECIMAL(16, 4),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, stock_id)
+);
+
+-- Initial account setup
+INSERT INTO sim_account (user_id, cash_balance, total_asset)
+VALUES ('default_user', 1000000, 1000000)
+ON CONFLICT (user_id) DO NOTHING;
