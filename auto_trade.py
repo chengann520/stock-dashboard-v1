@@ -5,13 +5,11 @@ import pandas as pd
 import pandas_ta as ta
 from datetime import datetime, timedelta, date
 from supabase import create_client
-from FinMind.data import DataLoader
 from tqdm import tqdm
 
 # --- 1. 連線設定 ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-FINMIND_TOKEN = os.environ.get("FINMIND_TOKEN")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ 錯誤: 環境變數未設定 (SUPABASE_URL/KEY)")
@@ -68,14 +66,11 @@ def get_all_stocks_from_db():
 def check_technical_exit(stock_id, strategy_name, p1, p2):
     """檢查這支股票是否出現「技術賣訊」"""
     try:
-        api = DataLoader()
-        if FINMIND_TOKEN: api.login_by_token(api_token=FINMIND_TOKEN)
-        
-        start_date = (date.today() - timedelta(days=100)).strftime('%Y-%m-%d')
-        df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=date.today().strftime('%Y-%m-%d'))
+        start_date = (date.today() - timedelta(days=120)).strftime('%Y-%m-%d')
+        res = supabase.table('fact_price').select('*').eq('stock_id', stock_id).gte('date', start_date).order('date').execute()
+        df = pd.DataFrame(res.data)
         
         if df.empty or len(df) < max(p1, p2, 30): return False, "資料不足"
-        df = df.sort_values('date')
         
         if strategy_name == 'MA_CROSS':
             df['MA_S'] = ta.sma(df['close'], length=p1)
@@ -121,8 +116,6 @@ def run_prediction():
     
     print(f"🧠 策略: {strategy_name} ({p1},{p2}) | 風險模式: {risk_pref} | 單筆預算: ${final_trade_size:,.0f}")
 
-    api = DataLoader()
-    if FINMIND_TOKEN: api.login_by_token(api_token=FINMIND_TOKEN)
     start_date = (date.today() - timedelta(days=120)).strftime('%Y-%m-%d')
     
     try:
@@ -131,12 +124,13 @@ def run_prediction():
     except: return
     
     orders_data = []
-    BATCH_SIZE = 50
+    BATCH_SIZE = 100 # 從 Supabase 抓資料可以大一點
     
     for i in tqdm(range(0, len(all_stocks), BATCH_SIZE), desc="Analyzing Market"):
         batch_stocks = all_stocks[i : i + BATCH_SIZE]
         try:
-            df_batch = api.taiwan_stock_daily(stock_id=batch_stocks, start_date=start_date, end_date=date.today().strftime('%Y-%m-%d'))
+            res = supabase.table('fact_price').select('*').in_('stock_id', batch_stocks).gte('date', start_date).order('date').execute()
+            df_batch = pd.DataFrame(res.data)
             if df_batch.empty: continue
 
             for stock_id, df in df_batch.groupby('stock_id'):
@@ -181,7 +175,9 @@ def run_prediction():
                         if current_cash >= est_cost:
                             orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
                             current_cash -= est_cost
-        except: time.sleep(1)
+        except Exception as e:
+            print(f"⚠️ 批次處理失敗: {e}")
+            time.sleep(1)
 
     if orders_data:
         real_account = supabase.table('sim_account').select('cash_balance').eq('user_id', 'default_user').execute().data[0]
@@ -200,15 +196,15 @@ def run_prediction():
 
 def run_settlement():
     print(f"⚖️ [盤後] 開始結算... {date.today()}")
-    api = DataLoader()
-    if FINMIND_TOKEN: api.login_by_token(api_token=FINMIND_TOKEN)
     today_str = date.today().strftime('%Y-%m-%d')
     
     try:
         pending_orders = supabase.table('sim_orders').select('*').eq('status', 'PENDING').execute().data
         if pending_orders:
             stock_ids = list(set([o['stock_id'] for o in pending_orders]))
-            df_market = api.taiwan_stock_daily(stock_id=stock_ids, start_date=today_str, end_date=today_str)
+            res = supabase.table('fact_price').select('*').in_('stock_id', stock_ids).eq('date', today_str).execute()
+            df_market = pd.DataFrame(res.data)
+            
             if not df_market.empty:
                 account = supabase.table('sim_account').select('*').eq('user_id', 'default_user').execute().data[0]
                 cash = float(account['cash_balance'])
@@ -228,7 +224,8 @@ def run_settlement():
                         if order['action'] == 'BUY': cash += calculate_cost(order['order_price'], order['shares'])[0]
                         supabase.table('sim_orders').update({'status': 'CANCELLED'}).eq('id', order['id']).execute()
                 supabase.table('sim_account').update({'cash_balance': cash}).eq('user_id', 'default_user').execute()
-    except: pass
+    except Exception as e:
+        print(f"❌ 結算失敗: {e}")
 
     print("🔍 檢查庫存 (停損 / 停利 / AI出場)...")
     try:
@@ -241,7 +238,9 @@ def run_settlement():
         inventory = supabase.table('sim_inventory').select('*').eq('user_id', 'default_user').execute().data
         if inventory:
             inv_stock_ids = [item['stock_id'] for item in inventory]
-            df_inv_market = api.taiwan_stock_daily(stock_id=inv_stock_ids, start_date=today_str, end_date=today_str)
+            res = supabase.table('fact_price').select('*').in_('stock_id', inv_stock_ids).eq('date', today_str).execute()
+            df_inv_market = pd.DataFrame(res.data)
+            
             if not df_inv_market.empty:
                 account = supabase.table('sim_account').select('cash_balance').eq('user_id', 'default_user').execute().data[0]
                 cash = float(account['cash_balance'])
@@ -264,7 +263,8 @@ def run_settlement():
                         supabase.table('sim_transactions').insert({'user_id': 'default_user', 'stock_id': item['stock_id'], 'action': 'SELL', 'price': close_price, 'shares': item['shares'], 'fee': fee, 'tax': tax, 'total_amount': revenue}).execute()
                         print(f"⚡ {item['stock_id']} {reason} -> 賣出成功")
                 supabase.table('sim_account').update({'cash_balance': cash}).eq('user_id', 'default_user').execute()
-    except: pass
+    except Exception as e:
+        print(f"❌ 庫存檢查失敗: {e}")
 
     try: calculate_total_assets(float(supabase.table('sim_account').select('cash_balance').eq('user_id', 'default_user').execute().data[0]['cash_balance']))
     except: pass
