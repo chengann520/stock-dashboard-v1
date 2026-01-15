@@ -129,6 +129,17 @@ ON CONFLICT (user_id) DO NOTHING;
 INSERT INTO strategy_config (user_id) VALUES ('default_user')
 ON CONFLICT (user_id) DO NOTHING;
 
+-- Table: sim_daily_stats (Daily Performance Metrics)
+CREATE TABLE IF NOT EXISTS sim_daily_stats (
+    date DATE PRIMARY KEY,
+    total_predictions INTEGER DEFAULT 0,
+    correct_predictions INTEGER DEFAULT 0,
+    win_rate DECIMAL(5, 4) DEFAULT 0,
+    avg_return DECIMAL(8, 4) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Index for performance
 CREATE INDEX IF NOT EXISTS idx_fact_price_date ON fact_price(date);
 CREATE INDEX IF NOT EXISTS idx_ai_analysis_date ON ai_analysis(date);
+CREATE INDEX IF NOT EXISTS idx_sim_daily_stats_date ON sim_daily_stats(date);
