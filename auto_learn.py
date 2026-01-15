@@ -3,14 +3,12 @@ import pandas as pd
 import pandas_ta as ta
 from datetime import date, timedelta
 from supabase import create_client
-from FinMind.data import DataLoader
 from tqdm import tqdm
 import yfinance as yf
 
 # --- 連線設定 ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-FINMIND_TOKEN = os.environ.get("FINMIND_TOKEN")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ 錯誤: 未設定 SUPABASE_URL 或 SUPABASE_KEY")
@@ -40,43 +38,40 @@ def update_params(strategy, p1, p2, best_roi):
         print(f"❌ 更新參數失敗: {e}")
 
 # --- 強化版資料抓取函數 ---
-def fetch_training_data(stock_id='0050.TW', days=100):
+def fetch_training_data(stock_id='0050.TW', days=120):
     """
-    嘗試從 FinMind 抓取，失敗則自動切換到 yfinance
+    嘗試從 Supabase 抓取，失敗則自動切換到 yfinance
     """
     start_date = (date.today() - timedelta(days=days)).strftime('%Y-%m-%d')
-    end_date = date.today().strftime('%Y-%m-%d')
     
-    # 1. 優先嘗試 FinMind
-    if FINMIND_TOKEN:
-        try:
-            print(f"📥 嘗試從 FinMind 下載 {stock_id}...")
-            api = DataLoader()
-            api.login_by_token(api_token=FINMIND_TOKEN)
-            df = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=end_date)
-            
-            if not df.empty:
-                print("✅ FinMind 資料下載成功")
-                return df
-            else:
-                print("⚠️ FinMind 回傳空資料，切換備用方案...")
-        except Exception as e:
-            print(f"⚠️ FinMind 連線錯誤: {e}")
+    # 1. 優先嘗試 Supabase (fact_price)
+    try:
+        print(f"📥 嘗試從 Supabase 讀取 {stock_id} 歷史資料...")
+        res = supabase.table('fact_price').select('*').eq('stock_id', stock_id).gte('date', start_date).order('date').execute()
+        df = pd.DataFrame(res.data)
+        
+        if not df.empty:
+            print(f"✅ Supabase 資料讀取成功 ({len(df)} 筆)")
+            return df
+        else:
+            print("⚠️ Supabase 無資料，切換備用方案...")
+    except Exception as e:
+        print(f"⚠️ Supabase 讀取錯誤: {e}")
 
     # 2. 備用方案：Yahoo Finance (yfinance)
     try:
         print(f"🌍 切換至 Yahoo Finance 下載 {stock_id}...")
+        end_date = date.today().strftime('%Y-%m-%d')
         df = yf.download(stock_id, start=start_date, end=end_date, progress=False)
         
         if not df.empty:
             df = df.reset_index()
-            # 處理 MultiIndex (新版 yfinance 可能會有雙層標題)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
                 
             # 確保欄位名稱對齊 (Open, High, Low, Close)
             df = df.rename(columns={'Date': 'date', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'})
-            # 確保 Close 欄位存在 (yfinance 有時是大寫)
+            # 確保 Close 欄位存在
             if 'close' not in df.columns and 'Close' in df.columns:
                 df['close'] = df['Close']
             
@@ -160,7 +155,7 @@ def run_learning():
     df = fetch_training_data('0050.TW', days=120)
     
     if df.empty:
-        print("❌ 無法取得訓練數據 (FinMind & Yahoo 都失敗)，請檢查網路或代號")
+        print("❌ 無法取得訓練數據 (Supabase & Yahoo 都失敗)，請檢查網路或代號")
         return
 
     # 2. 定義參數範圍
