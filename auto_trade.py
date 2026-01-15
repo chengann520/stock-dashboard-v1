@@ -367,7 +367,12 @@ def run_prediction():
     # ==========================================
     else:
         all_stocks = get_all_stocks_from_db()
+        print(f"🔍 [通用掃描] 開始掃描 {len(all_stocks)} 檔股票...")
         BATCH_SIZE = 100
+        total_scanned = 0
+        total_signals = 0
+        total_filtered_conf = 0
+        
         for i in tqdm(range(0, len(all_stocks), BATCH_SIZE), desc="Analyzing Market"):
             batch_stocks = all_stocks[i : i + BATCH_SIZE]
             try:
@@ -376,57 +381,74 @@ def run_prediction():
                 if df_batch.empty: continue
 
                 for stock_id, df in df_batch.groupby('stock_id'):
+                    total_scanned += 1
                     if len(df) < p2 + 5: continue
                     df = df.sort_values('date')
                     limit_price = float(df.iloc[-1]['close'])
                     signal = False
                     
                     try:
+                        # 核心邏輯：偵測最近 3 天是否有交叉訊號
                         if strategy_name == 'MA_CROSS':
                             df['MA_S'], df['MA_L'] = ta.sma(df['close'], length=p1), ta.sma(df['close'], length=p2)
-                            if df.iloc[-2]['MA_S'] < df.iloc[-2]['MA_L'] and df.iloc[-1]['MA_S'] > df.iloc[-1]['MA_L']: signal = True
+                            is_cross = (df['MA_S'].shift(1) < df['MA_L'].shift(1)) & (df['MA_S'] > df['MA_L'])
+                            if is_cross.tail(3).any(): signal = True
                         elif strategy_name == 'RSI_REVERSAL':
                             df['RSI'] = ta.rsi(df['close'], length=p1)
-                            if df.iloc[-2]['RSI'] < p2 and df.iloc[-1]['RSI'] > df.iloc[-2]['RSI']: signal, limit_price = True, limit_price * 0.99
+                            is_rev = (df['RSI'].shift(1) < p2) & (df['RSI'] > df['RSI'].shift(1))
+                            if is_rev.tail(3).any(): signal, limit_price = True, limit_price * 0.99
                         elif strategy_name == 'KD_CROSS':
                             kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
                             k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
-                            if df.iloc[-2][k_col] < df.iloc[-2][d_col] and df.iloc[-1][k_col] > df.iloc[-1][d_col] and df.iloc[-1][k_col] < p2: signal = True
+                            is_cross = (kdf[k_col].shift(1) < kdf[d_col].shift(1)) & (kdf[k_col] > kdf[d_col]) & (kdf[k_col] < p2)
+                            if is_cross.tail(3).any(): signal = True
                         elif strategy_name == 'MACD_CROSS':
                             macdf = ta.macd(df['close'], fast=p1, slow=p2, signal=9)
                             hist_col = f"MACDh_{p1}_{p2}_9"
-                            if df.iloc[-2][hist_col] < 0 and df.iloc[-1][hist_col] > 0: signal = True
+                            is_cross = (macdf[hist_col].shift(1) <= 0) & (macdf[hist_col] > 0)
+                            if is_cross.tail(3).any(): signal = True
                     except: continue
 
-                    if signal and stock_id not in owned_stocks:
-                        confidence = calculate_confidence(df, strategy_name, p1, p2)
-                        if confidence >= conf_threshold:
-                            try:
-                                supabase.table('ai_analysis').upsert({
-                                    'stock_id': stock_id, 'date': str(date.today()), 'signal': 'Bull', 
-                                    'probability': confidence, 'entry_price': round(limit_price, 2),
-                                    'target_price': round(limit_price * 1.1, 2), 'stop_loss': round(limit_price * 0.95, 2)
-                                }).execute()
-                            except: pass
-                            
-                            shares = int(final_trade_size // limit_price)
-                            if shares > 0:
-                                est_cost, _ = calculate_cost(limit_price, shares)
-                                if current_cash >= est_cost:
-                                    orders_data.append({
-                                        'user_id': 'default_user', 
-                                        'date': str(date.today()), 
-                                        'stock_id': stock_id, 
-                                        'action': 'BUY', 
-                                        'order_price': round(limit_price, 2), 
-                                        'shares': shares, 
-                                        'status': 'PENDING',
-                                        'total_amount': est_cost
-                                    })
-                                    current_cash -= est_cost
-                        else:
-                            pass # 信心不足不掛單
-            except: time.sleep(1)
+                    if signal:
+                        total_signals += 1
+                        if stock_id not in owned_stocks:
+                            confidence = calculate_confidence(df, strategy_name, p1, p2)
+                            if confidence >= conf_threshold:
+                                try:
+                                    supabase.table('ai_analysis').upsert({
+                                        'stock_id': stock_id, 'date': str(date.today()), 'signal': 'Bull', 
+                                        'probability': confidence, 'entry_price': round(limit_price, 2),
+                                        'target_price': round(limit_price * 1.1, 2), 'stop_loss': round(limit_price * 0.95, 2)
+                                    }).execute()
+                                except: pass
+                                
+                                shares = int(final_trade_size // limit_price)
+                                if shares > 0:
+                                    est_cost, _ = calculate_cost(limit_price, shares)
+                                    if current_cash >= est_cost:
+                                        orders_data.append({
+                                            'user_id': 'default_user', 
+                                            'date': str(date.today()), 
+                                            'stock_id': stock_id, 
+                                            'action': 'BUY', 
+                                            'order_price': round(limit_price, 2), 
+                                            'shares': shares, 
+                                            'status': 'PENDING',
+                                            'total_amount': est_cost
+                                        })
+                                        current_cash -= est_cost
+                            else:
+                                total_filtered_conf += 1
+                                # print(f"   📉 {stock_id} 信心不足 ({confidence} < {conf_threshold})")
+            except Exception as e: 
+                print(f"⚠️ 掃描批次時出錯: {e}")
+                time.sleep(1)
+        
+        print(f"\n📊 掃描總結:")
+        print(f"   - 掃描標的數: {total_scanned}")
+        print(f"   - 觸發訊號數: {total_signals}")
+        print(f"   - 因信心不足過濾: {total_filtered_conf}")
+        print(f"   - 最終入選掛單: {len(orders_data)}")
 
     # 3. 寫入資料庫 (通用)
     if orders_data:
