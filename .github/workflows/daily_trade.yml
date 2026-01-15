@@ -40,7 +40,7 @@ jobs:
     - name: 安裝套件
       run: |
         python -m pip install --upgrade pip
-        pip install supabase finmind pandas plotly tqdm pandas_ta
+        pip install supabase finmind pandas plotly tqdm pandas_ta yfinance
 
     - name: Debug - 檢查金鑰狀態
       run: |
