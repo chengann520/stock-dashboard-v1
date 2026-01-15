@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS strategy_config (
     strategy_mode VARCHAR(20) DEFAULT 'CONSERVATIVE',
     ai_confidence_threshold DECIMAL(16, 4) DEFAULT 0.7,
     active_strategy VARCHAR(50) DEFAULT 'MA_CROSS',
+    risk_preference VARCHAR(20) DEFAULT 'NEUTRAL',
     param_1 INTEGER DEFAULT 5,
     param_2 INTEGER DEFAULT 20,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
