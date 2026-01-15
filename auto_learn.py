@@ -124,6 +124,32 @@ def quick_backtest(df, strategy_name, p1, p2):
             df.loc[(macdf[hist_col] > 0) & (macdf[hist_col].shift(1) <= 0), 'Signal'] = 1
             df.loc[(macdf[hist_col] < 0) & (macdf[hist_col].shift(1) >= 0), 'Signal'] = -1
 
+        elif strategy_name == 'N1_MOMENTUM':
+            # 單標的回測邏輯：動能向上 + RSI 未過熱 + 站上 MA20
+            df['MA20'] = ta.sma(df['close'], length=20)
+            df['RSI'] = ta.rsi(df['close'], length=14)
+            df['Momentum'] = df['close'].pct_change(periods=p1)
+            df['Signal'] = 0
+            # 買入條件：動能 > 0 且 RSI < p2 且 價格 > MA20
+            cond_buy = (df['Momentum'] > 0) & (df['RSI'] < p2) & (df['close'] > df['MA20'])
+            # 賣出條件：RSI > p2 或 價格 < MA20
+            cond_sell = (df['RSI'] >= p2) | (df['close'] < df['MA20'])
+            df.loc[cond_buy, 'Signal'] = 1
+            df.loc[cond_sell, 'Signal'] = -1
+
+        elif strategy_name == 'BEST_OF_3':
+            # 單標的回測邏輯：跌深 (Drawdown) + 長線保護 (MA p2)
+            df['MA_L'] = ta.sma(df['close'], length=p2)
+            df['Recent_High'] = df['high'].rolling(window=p1).max()
+            df['Drawdown'] = (df['close'] - df['Recent_High']) / df['Recent_High']
+            df['Signal'] = 0
+            # 買入條件：跌幅超過 5% (模擬跌深) 且 價格 > MA_L
+            cond_buy = (df['Drawdown'] < -0.05) & (df['close'] > df['MA_L'])
+            # 賣出條件：價格回升或跌破 MA_L
+            cond_sell = (df['Drawdown'] > -0.01) | (df['close'] < df['MA_L'])
+            df.loc[cond_buy, 'Signal'] = 1
+            df.loc[cond_sell, 'Signal'] = -1
+
         # 計算損益
         capital = 100000
         balance = capital
