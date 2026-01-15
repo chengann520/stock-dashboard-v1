@@ -37,52 +37,76 @@ def save_config(new_config):
         st.error(f"儲存失敗: {e}")
 
 def show_strategy_settings_page():
-    st.title("🧠 AI 策略邏輯灌輸中心")
-    st.info("在此教導 AI 該使用哪種技術指標來判斷進場點。")
-
-    # 讀取現有設定
-    current_config = load_config()
+    st.title("🧠 AI 策略與風險控制中心")
     
-    if not current_config:
-        st.warning("無法讀取設定，使用預設值")
-        current_config = {}
+    current_config = load_config()
 
     with st.form("strategy_form"):
-        st.subheader("1. 資金與風險管理 (Risk Management)")
+        # === 1. 風險性格設定 ===
+        st.subheader("1. 風險性格設定 (Risk Personality)")
+        st.info("這會影響 AI 的下單部位大小與進場積極度。")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            # 單筆交易金額上限
-            max_pos = st.number_input(
-                "單筆最大投入金額 (NTD)", 
-                min_value=10000, 
-                max_value=1000000, 
-                step=10000, 
-                value=int(current_config.get('max_position_size', 100000))
-            )
-            
-        with col2:
-            # 停損百分比
-            stop_loss = st.slider(
-                "停損點 (Stop Loss %)", 
-                min_value=0.01, max_value=0.20, step=0.01,
-                value=float(current_config.get('stop_loss_pct', 0.05)),
-                format="%.2f"
-            )
+        risk_options = {
+            'AVERSE': '🛡️ 風險趨避 (保守，部位 x0.8，高門檻)',
+            'NEUTRAL': '⚖️ 風險中立 (標準，部位 x1.0)',
+            'SEEKING': '🔥 風險偏好 (激進，部位 x1.2，低門檻)'
+        }
+        
+        curr_risk = current_config.get('risk_preference', 'NEUTRAL')
+        risk_key = st.selectbox(
+            "請選擇您的風險偏好",
+            options=list(risk_options.keys()),
+            format_func=lambda x: risk_options[x],
+            index=list(risk_options.keys()).index(curr_risk) if curr_risk in risk_options else 1
+        )
 
         st.divider()
 
-        # === 重點：策略邏輯選擇區 ===
-        st.subheader("2. 核心交易邏輯 (Core Logic)")
+        # === 2. 自動出場機制 (Exit Strategy) ===
+        st.subheader("2. 自動出場機制 (Exit Strategy)")
         
-        # 定義有哪些策略可選
+        col1, col2 = st.columns(2)
+        with col1:
+            stop_loss = st.slider(
+                "🛑 停損點 (Stop Loss %)", 
+                0.01, 0.30, 
+                float(current_config.get('stop_loss_pct', 0.05)),
+                format="%.2f",
+                help="虧損超過此比例，AI 將強制止損"
+            )
+            
+        with col2:
+            # 讀取現有設定，如果是 0 代表是用 AI 判斷
+            current_tp = float(current_config.get('take_profit_pct', 0.10))
+            is_dynamic = (current_tp == 0.0)
+            
+            st.write("💰 停利策略")
+            # 使用 Checkbox 切換模式
+            use_ai_exit = st.checkbox("由 AI 自行判斷賣點 (趨勢反轉才賣)", value=is_dynamic)
+            
+            if use_ai_exit:
+                st.info("🤖 AI 將在出現「技術賣訊」時才獲利了結 (例如: 均線死亡交叉)。這能讓獲利最大化，但也可能回吐部分獲利。")
+                take_profit = 0.0 # 存入 0 代表動態停利
+            else:
+                take_profit = st.slider(
+                    "固定停利點 %", 
+                    0.05, 1.00, 
+                    0.10 if is_dynamic else current_tp, # 如果原本是 AI 模式，切回來預設 10%
+                    format="%.2f"
+                )
+
+        st.divider()
+
+        # === 3. 資金與交易邏輯 ===
+        st.subheader("3. 交易邏輯與資金")
+        max_pos = st.number_input("基準單筆金額 (NTD)", value=int(current_config.get('max_position_size', 100000)))
+        
+        # 策略選擇
         strategies = {
             'MA_CROSS': '📈 均線黃金交叉 (順勢策略)',
             'RSI_REVERSAL': '📉 RSI 超賣反彈 (逆勢抄底)',
             'KD_CROSS': '🔁 KD 指標黃金交叉 (波段操作)'
         }
-        
-        # 找出目前設定的策略索引
         curr_strat = current_config.get('active_strategy', 'MA_CROSS')
         strat_keys = list(strategies.keys())
         try:
@@ -91,13 +115,13 @@ def show_strategy_settings_page():
             idx = 0
             
         selected_strat_key = st.selectbox(
-            "請選擇要灌輸給 AI 的交易邏輯",
+            "核心策略",
             options=strat_keys,
             format_func=lambda x: strategies[x],
             index=idx
         )
         
-        # 根據選擇的策略，動態顯示參數輸入框
+        # 參數輸入
         p1_val = int(current_config.get('param_1', 5))
         p2_val = int(current_config.get('param_2', 20))
         
@@ -126,12 +150,14 @@ def show_strategy_settings_page():
 
         st.divider()
         
-        submitted = st.form_submit_button("🧠 灌輸邏輯並儲存")
+        submitted = st.form_submit_button("💾 更新 AI 大腦")
         
         if submitted:
             new_settings = {
-                'max_position_size': max_pos,
+                'risk_preference': risk_key,
                 'stop_loss_pct': stop_loss,
+                'take_profit_pct': take_profit,
+                'max_position_size': max_pos,
                 'active_strategy': selected_strat_key,
                 'param_1': param_1,
                 'param_2': param_2
