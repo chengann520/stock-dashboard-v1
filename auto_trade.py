@@ -265,7 +265,17 @@ def run_prediction():
                 confidence = calculate_confidence(df_stock, 'N1_MOMENTUM', p1, p2)
                 
                 if confidence >= conf_threshold:
-                    orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock, 'action': 'BUY', 'order_price': round(price, 2), 'shares': shares, 'status': 'PENDING'})
+                    est_cost, _ = calculate_cost(price, shares)
+                    orders_data.append({
+                        'user_id': 'default_user', 
+                        'date': str(date.today()), 
+                        'stock_id': stock, 
+                        'action': 'BUY', 
+                        'order_price': round(price, 2), 
+                        'shares': shares, 
+                        'status': 'PENDING',
+                        'total_amount': est_cost
+                    })
                     # 寫入 AI 分析表
                     supabase.table('ai_analysis').upsert({
                         'stock_id': stock, 'date': str(date.today()), 'signal': 'Bull', 
@@ -331,7 +341,17 @@ def run_prediction():
                 confidence = calculate_confidence(df_dip, 'BEST_OF_3', p1, p2)
                 
                 if confidence >= conf_threshold:
-                    orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': best_dip['stock_id'], 'action': 'BUY', 'order_price': round(best_dip['price'], 2), 'shares': shares, 'status': 'PENDING'})
+                    est_cost, _ = calculate_cost(best_dip['price'], shares)
+                    orders_data.append({
+                        'user_id': 'default_user', 
+                        'date': str(date.today()), 
+                        'stock_id': best_dip['stock_id'], 
+                        'action': 'BUY', 
+                        'order_price': round(best_dip['price'], 2), 
+                        'shares': shares, 
+                        'status': 'PENDING',
+                        'total_amount': est_cost
+                    })
                     supabase.table('ai_analysis').upsert({
                         'stock_id': best_dip['stock_id'], 'date': str(date.today()), 'signal': 'Bull', 
                         'probability': confidence, 'entry_price': round(best_dip['price'], 2),
@@ -393,7 +413,16 @@ def run_prediction():
                             if shares > 0:
                                 est_cost, _ = calculate_cost(limit_price, shares)
                                 if current_cash >= est_cost:
-                                    orders_data.append({'user_id': 'default_user', 'date': str(date.today()), 'stock_id': stock_id, 'action': 'BUY', 'order_price': round(limit_price, 2), 'shares': shares, 'status': 'PENDING'})
+                                    orders_data.append({
+                                        'user_id': 'default_user', 
+                                        'date': str(date.today()), 
+                                        'stock_id': stock_id, 
+                                        'action': 'BUY', 
+                                        'order_price': round(limit_price, 2), 
+                                        'shares': shares, 
+                                        'status': 'PENDING',
+                                        'total_amount': est_cost
+                                    })
                                     current_cash -= est_cost
                         else:
                             pass # 信心不足不掛單
