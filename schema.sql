@@ -87,3 +87,28 @@ CREATE TABLE IF NOT EXISTS sim_inventory (
 INSERT INTO sim_account (user_id, cash_balance, total_asset)
 VALUES ('default_user', 1000000, 1000000)
 ON CONFLICT (user_id) DO NOTHING;
+-- Table: sim_transactions (Simulation Transaction History)
+CREATE TABLE IF NOT EXISTS sim_transactions (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(50) DEFAULT 'default_user',
+    trade_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    stock_id VARCHAR(20) REFERENCES dim_stock(stock_id),
+    action VARCHAR(10), -- 'BUY' or 'SELL'
+    price DECIMAL(16, 4),
+    shares INT,
+    fee DECIMAL(16, 4),
+    tax DECIMAL(16, 4),
+    total_amount DECIMAL(16, 4)
+);
+
+-- Table: sim_daily_assets (Simulation Daily Asset Snapshots)
+CREATE TABLE IF NOT EXISTS sim_daily_assets (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(50) DEFAULT 'default_user',
+    date DATE,
+    cash_balance DECIMAL(16, 4),
+    stock_value DECIMAL(16, 4),
+    total_assets DECIMAL(16, 4),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, date)
+);
