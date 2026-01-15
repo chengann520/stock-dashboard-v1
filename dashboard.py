@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import random
 from dotenv import load_dotenv
 from page_paper_trade import show_ai_trading_page
-from page_strategy_settings import show_strategy_settings_page
+from page_strategy_settings import show_strategy_settings_page, load_config
 
 # 0. 載入環境變數 (本地測試用)
 load_dotenv()
@@ -54,6 +54,9 @@ if not db_url:
 
 engine = create_engine(db_url)
 
+# --- 2.5 載入策略設定 ---
+strategy_config = load_config()
+
 # --- 3. 模擬交易引擎與參數 ---
 INITIAL_CAPITAL = 1_000_000  # 初始資金 100萬
 FEE_RATE = 0.001425          # 手續費 0.1425%
@@ -71,6 +74,10 @@ class BacktestEngine:
         self.inventory = {}  # 持倉: {stock_id: shares}
         self.history = []    # 交易紀錄
         self.daily_assets = [] # 每日資產總值紀錄
+        
+        # 從資料庫同步設定
+        self.max_trade_budget = float(strategy_config.get('max_position_size', 100000))
+        self.stop_loss_pct = float(strategy_config.get('stop_loss_pct', 0.05))
 
     def calculate_cost(self, price, shares):
         amount = price * shares
@@ -103,13 +110,15 @@ class BacktestEngine:
                 action, limit_price = get_mock_ai_signal(d, stock, ref_price)
                 
                 if action == 'buy' and self.cash > 0:
-                    shares = 1000 
-                    cost_estimate, _ = self.calculate_cost(limit_price, shares)
-                    if self.cash >= cost_estimate:
-                        pending_orders.append({
-                            'action': 'buy', 'stock': stock, 
-                            'price': limit_price, 'shares': shares, 'date': d
-                        })
+                    # 根據設定決定買入股數 (預算 / 市價)
+                    shares = int(self.max_trade_budget // limit_price)
+                    if shares > 0:
+                        cost_estimate, _ = self.calculate_cost(limit_price, shares)
+                        if self.cash >= cost_estimate:
+                            pending_orders.append({
+                                'action': 'buy', 'stock': stock, 
+                                'price': limit_price, 'shares': shares, 'date': d
+                            })
                 elif action == 'sell' and stock in self.inventory:
                     shares = self.inventory[stock]
                     pending_orders.append({
@@ -163,6 +172,26 @@ class BacktestEngine:
             total_asset = self.cash + stock_value
             self.daily_assets.append({'date': d, 'total_asset': total_asset, 'cash': self.cash, 'stock_value': stock_value})
 
+            # --- 增加：出場檢查 (停損) ---
+            if self.inventory:
+                to_remove = []
+                for stock, shares in self.inventory.items():
+                    stock_rows = daily_data[daily_data['stock_id'] == stock]
+                    if not stock_rows.empty:
+                        curr_p = float(stock_rows.iloc[0]['close'])
+                        # 查找買入價格 (簡化版：拿歷史最後一筆買入價)
+                        buy_price = [h['成交價'] for h in self.history if h['股票代號'] == stock and h['買賣別'] == '買入'][-1]
+                        if (curr_p - buy_price) / buy_price <= -self.stop_loss_pct:
+                            revenue, fee, tax = self.calculate_revenue(curr_p, shares)
+                            self.cash += revenue
+                            self.history.append({
+                                '交易日期': d, '股票代號': stock, '買賣別': '賣出',
+                                '成交價': curr_p, '股數': shares, '手續費': fee, '交易稅': tax, '總金額': revenue,
+                                '備註': '🛑 停損觸發'
+                            })
+                            to_remove.append(stock)
+                for s in to_remove: del self.inventory[s]
+
         return pd.DataFrame(self.history), pd.DataFrame(self.daily_assets)
 
 # 🟢 改寫：通知函式 (只回傳資料，不負責畫圖)
@@ -201,6 +230,16 @@ def get_ai_notifications():
 
 # 1. 建立頂部兩欄佈局 (左邊標題，右邊通知)
 col_header, col_notify = st.columns([7, 3]) # 左7右3的比例
+
+# --- 顯示當前策略概覽 (核心戰術對齊) ---
+if strategy_config:
+    with col_header:
+        s_strat = strategy_config.get('active_strategy', 'N/A')
+        s_risk = strategy_config.get('risk_preference', 'N/A')
+        s_budget = strategy_config.get('max_position_size', 0)
+        s_stop = strategy_config.get('stop_loss_pct', 0)
+        
+        st.info(f"🧠 **AI 核心戰術**：`{s_strat}` | **風險偏好**：`{s_risk}` | **單筆預算**：`${s_budget:,.0f}` | **停損設定**：`{s_stop*100:.1f}%`", icon="💡")
 
 with col_header:
     st.title("� 台股戰情室")
