@@ -72,11 +72,13 @@ def get_all_stocks_from_db():
     try:
         res = supabase.table('dim_stock').select('stock_id').limit(3000).execute()
         stocks = [item['stock_id'] for item in res.data]
-        print(f"✅ 成功讀取 {len(stocks)} 檔股票")
+        print(f"✅ 成功從資料庫讀取 {len(stocks)} 檔股票")
         return stocks
     except Exception as e:
         print(f"❌ 讀取股票清單失敗: {e}")
-        return ['2330.TW', '2317.TW', '2454.TW', '2881.TW', '2603.TW']
+        stocks = ['2330.TW', '2317.TW', '2454.TW', '2881.TW', '2603.TW']
+        print(f"⚠️ 使用預設代單檔數: {len(stocks)} ({stocks})")
+        return stocks
 
 def check_technical_exit(stock_id, strategy_name, p1, p2):
     """檢查這支股票是否出現「技術賣訊」"""
@@ -392,20 +394,28 @@ def run_prediction():
                         if strategy_name == 'MA_CROSS':
                             df['MA_S'], df['MA_L'] = ta.sma(df['close'], length=p1), ta.sma(df['close'], length=p2)
                             is_cross = (df['MA_S'].shift(1) < df['MA_L'].shift(1)) & (df['MA_S'] > df['MA_L'])
+                            
+                            if stock_id == '2330.TW': # 針對台積電測試
+                                print(f"2330 Debug: MA_S={df.iloc[-1]['MA_S']:.2f}, MA_L={df.iloc[-1]['MA_L']:.2f}, Prev_MA_S={df.iloc[-2]['MA_S']:.2f}, Prev_MA_L={df.iloc[-2]['MA_L']:.2f}, Cross={is_cross.iloc[-1]}")
+
+                            print(f"🔍 [{stock_id}] MA{p1}:{df['MA_S'].iloc[-1]:.2f}, MA{p2}:{df['MA_L'].iloc[-1]:.2f} | 交叉(3日): {is_cross.tail(3).any()}")
                             if is_cross.tail(3).any(): signal = True
                         elif strategy_name == 'RSI_REVERSAL':
                             df['RSI'] = ta.rsi(df['close'], length=p1)
                             is_rev = (df['RSI'].shift(1) < p2) & (df['RSI'] > df['RSI'].shift(1))
+                            print(f"🔍 [{stock_id}] RSI:{df['RSI'].iloc[-1]:.2f} | 反轉(3日): {is_rev.tail(3).any()}")
                             if is_rev.tail(3).any(): signal, limit_price = True, limit_price * 0.99
                         elif strategy_name == 'KD_CROSS':
                             kdf = ta.stoch(df['high'], df['low'], df['close'], k=p1, d=3, smooth_k=3)
                             k_col, d_col = f"STOCHk_{p1}_3_3", f"STOCHd_{p1}_3_3"
                             is_cross = (kdf[k_col].shift(1) < kdf[d_col].shift(1)) & (kdf[k_col] > kdf[d_col]) & (kdf[k_col] < p2)
+                            print(f"🔍 [{stock_id}] K:{kdf[k_col].iloc[-1]:.2f}, D:{kdf[d_col].iloc[-1]:.2f} | 交叉(3日): {is_cross.tail(3).any()}")
                             if is_cross.tail(3).any(): signal = True
                         elif strategy_name == 'MACD_CROSS':
                             macdf = ta.macd(df['close'], fast=p1, slow=p2, signal=9)
                             hist_col = f"MACDh_{p1}_{p2}_9"
                             is_cross = (macdf[hist_col].shift(1) <= 0) & (macdf[hist_col] > 0)
+                            print(f"🔍 [{stock_id}] MACD Hist:{macdf[hist_col].iloc[-1]:.4f} | 交叉(3日): {is_cross.tail(3).any()}")
                             if is_cross.tail(3).any(): signal = True
                     except: continue
 
